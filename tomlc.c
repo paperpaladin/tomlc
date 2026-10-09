@@ -542,6 +542,130 @@ static void tbl_put(P *p, toml_value *t, toml_value *key, toml_value *v)
 	t->nkv++;
 }
 
+/* ---------------------------------------------------------------- numbers */
+
+/* A scalar token: everything a number, a date-time or a bare literal can be
+ * made of.  Scanning the whole token up front and then validating it is what
+ * makes "answer = 42 the ultimate answer?" and "0xaafz" errors at the number
+ * rather than surprises at the next production. */
+static int tok_char(int c)
+{
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+	       (c >= 'A' && c <= 'Z') || c == '_' || c == '+' || c == '-' ||
+	       c == '.' || c == ':';
+}
+
+static size_t scan_token(P *p)
+{
+	size_t n = 0;
+	while (p->pos + n < p->len && tok_char(p->p[p->pos + n])) n++;
+	return n;
+}
+
+static int digit_of(int c, int base)
+{
+	int v;
+	if (c >= '0' && c <= '9') v = c - '0';
+	else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
+	else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
+	else return -1;
+	return v < base ? v : -1;
+}
+
+/* One run of digits with underscores strictly between digits.  Accumulates
+ * into *out when out is non-NULL and sets *ovf if it does not fit; copies the
+ * digits with the underscores removed to dst when dst is non-NULL, which is
+ * what strtod has to be handed. */
+static int digit_run(P *p, const char *s, size_t n, size_t *i, int base,
+		     int lead_zero_ok, unsigned long long *out, int *ovf,
+		     toml_value *dst)
+{
+	if (*i >= n || digit_of(s[*i], base) < 0)
+		return err(p, p->pos + *i, "expected a digit");
+	if (!lead_zero_ok && s[*i] == '0' && *i + 1 < n &&
+	    (digit_of(s[*i + 1], base) >= 0 || s[*i + 1] == '_'))
+		return err(p, p->pos + *i, "leading zero");
+	while (*i < n) {
+		int d = digit_of(s[*i], base);
+		if (d >= 0) {
+			if (out) {
+				unsigned long long lim = ~0ULL;
+				if (*out > (lim - (unsigned)d) / (unsigned)base)
+					*ovf = 1;
+				else
+					*out = *out * (unsigned)base + (unsigned)d;
+			}
+			if (dst) sput(p, dst, s[*i]);
+			(*i)++;
+			continue;
+		}
+		if (s[*i] == '_') {
+			if (*i + 1 >= n || digit_of(s[*i + 1], base) < 0)
+				return err(p, p->pos + *i,
+					   "underscore must be between digits");
+			(*i)++;
+			continue;
+		}
+		break;
+	}
+	return 1;
+}
+
+static toml_value *int_node(P *p, unsigned long long mag, int neg, int ovf,
+			    size_t at)
+{
+	toml_value *v;
+	if (ovf || (neg ? mag > 9223372036854775808ULL
+			: mag > 9223372036854775807ULL)) {
+		err(p, at, "integer out of range for 64 bits");
+		return NULL;
+	}
+	v = node(p, TOML_INTEGER);
+	v->i = neg ? (long long)(0ULL - mag) : (long long)mag;
+	return v;
+}
+
+static toml_value *parse_number(P *p)
+{
+	const char *s = (const char *)p->p + p->pos;
+	size_t n = scan_token(p), i = 0;
+	size_t at = p->pos;
+	unsigned long long mag = 0;
+	int neg = 0, ovf = 0, signed_ = 0;
+	toml_value *v;
+
+	if (i < n && (s[i] == '+' || s[i] == '-')) {
+		neg = s[i] == '-';
+		signed_ = 1;
+		i++;
+	}
+	/* 0x / 0o / 0b take no sign, and the prefix letter is lower case:
+	 * 0X1 is not a number in TOML 1.0.0. */
+	if (!signed_ && i + 1 < n && s[i] == '0' &&
+	    (s[i + 1] == 'x' || s[i + 1] == 'o' || s[i + 1] == 'b')) {
+		int base = s[i + 1] == 'x' ? 16 : s[i + 1] == 'o' ? 8 : 2;
+		i += 2;
+		if (!digit_run(p, s, n, &i, base, 1, &mag, &ovf, NULL))
+			return NULL;
+		if (i != n) {
+			err(p, p->pos + i, "trailing junk after a number");
+			return NULL;
+		}
+		p->pos += n;
+		return int_node(p, mag, 0, ovf, at);
+	}
+	if (!digit_run(p, s, n, &i, 10, 0, &mag, &ovf, NULL))
+		return NULL;
+	if (i != n) {
+		err(p, p->pos + i, "trailing junk after a number");
+		return NULL;
+	}
+	v = int_node(p, mag, neg, ovf, at);
+	if (!v) return NULL;
+	p->pos += n;
+	return v;
+}
+
 /* ------------------------------------------------------------------ values */
 
 static toml_value *parse_value(P *p)
@@ -557,6 +681,8 @@ static toml_value *parse_value(P *p)
 		p->pos += 5; v->b = 0;
 		return v;
 	}
+	if ((AT(p) >= '0' && AT(p) <= '9') || AT(p) == '+' || AT(p) == '-')
+		return parse_number(p);
 	err(p, p->pos, "expected a value");
 	return NULL;
 }
