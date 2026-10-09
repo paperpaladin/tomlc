@@ -874,6 +874,85 @@ static toml_value *parse_value(P *p)
 	return NULL;
 }
 
+/* ------------------------------------------------------------ table syntax */
+
+/* shortcut: 64 dotted parts in one key or header.  A document with a
+ * 65-level dotted key is a parse error here; raise the constant or make it a
+ * growable array if anyone ever produces one. */
+#define MAX_PARTS 64
+
+static int parse_keypath(P *p, toml_value **parts, int *np)
+{
+	*np = 0;
+	for (;;) {
+		toml_value *k = parse_keypart(p);
+		if (!k) return 0;
+		if (*np == MAX_PARTS)
+			return err(p, p->pos, "dotted key is too deep");
+		parts[(*np)++] = k;
+		skip_ws(p);
+		if (AT(p) != '.') return 1;
+		p->pos++;
+		skip_ws(p);
+	}
+}
+
+/* One step of a [header] path.  A missing table is created implicitly and may
+ * be claimed by its own header later; anything that is not a table is a
+ * collision. */
+static toml_value *hdr_descend(P *p, toml_value *t, toml_value *key, size_t at)
+{
+	struct toml_kv *e = tbl_find(t, key->s, key->slen);
+	toml_value *n;
+	if (e) {
+		if (e->val->type != TOML_TABLE) {
+			err(p, at, "cannot use a non-table key as a table");
+			return NULL;
+		}
+		return e->val;
+	}
+	n = node(p, TOML_TABLE);
+	n->flags = F_IMPLICIT;
+	tbl_put(p, t, key, n);
+	return n;
+}
+
+static int parse_header(P *p, toml_value **cur)
+{
+	toml_value *parts[MAX_PARTS], *t = p->root;
+	struct toml_kv *e;
+	int np, i;
+	size_t at = p->pos;
+
+	p->pos++;				/* '[' */
+	skip_ws(p);
+	if (!parse_keypath(p, parts, &np)) return 0;
+	skip_ws(p);
+	if (AT(p) != ']') return err(p, p->pos, "expected ']' after a table header");
+	p->pos++;
+	if (!expect_eol(p)) return 0;
+
+	for (i = 0; i < np - 1; i++)
+		if (!(t = hdr_descend(p, t, parts[i], at))) return 0;
+
+	e = tbl_find(t, parts[np - 1]->s, parts[np - 1]->slen);
+	if (!e) {
+		toml_value *n = node(p, TOML_TABLE);
+		n->flags = F_EXPLICIT;
+		n->epoch = ++p->epoch;
+		tbl_put(p, t, parts[np - 1], n);
+		*cur = n;
+		return 1;
+	}
+	if (e->val->type == TOML_TABLE && (e->val->flags & F_IMPLICIT)) {
+		e->val->flags = F_EXPLICIT;
+		e->val->epoch = ++p->epoch;
+		*cur = e->val;
+		return 1;
+	}
+	return err(p, at, "table defined twice");
+}
+
 /* ------------------------------------------------------------------ parser */
 
 static int parse_keyval(P *p, toml_value *t)
@@ -894,13 +973,19 @@ static int parse_keyval(P *p, toml_value *t)
 
 static int parse_doc(P *p)
 {
+	toml_value *cur;
 	p->root = node(p, TOML_TABLE);
 	p->root->flags = F_EXPLICIT;
 	p->root->epoch = ++p->epoch;
+	cur = p->root;
 	for (;;) {
 		if (!skip_blank(p)) return 0;
 		if (EOFP(p)) return 1;
-		if (!parse_keyval(p, p->root)) return 0;
+		if (AT(p) == '[') {
+			if (!parse_header(p, &cur)) return 0;
+			continue;
+		}
+		if (!parse_keyval(p, cur)) return 0;
 		if (!expect_eol(p)) return 0;
 	}
 }
