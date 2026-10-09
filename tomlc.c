@@ -999,16 +999,21 @@ static toml_value *hdr_descend(P *p, toml_value *t, toml_value *key, size_t at)
 			err(p, at, "cannot use a non-table key as a table");
 			return NULL;
 		}
-		/* An inline table is closed forever, and a table built by a
-		 * dotted key may not be reopened by a header -- not even to
-		 * pass through it on the way to a deeper one. */
+		/* An inline table is closed forever, even as a step on the
+		 * way to a deeper header: a={} then [a.b] is an error.
+		 *
+		 * A table built by a dotted key is NOT closed to headers in
+		 * the same way, and this is where the first version of this
+		 * function was wrong.  toml-test's valid/spec-1.0.0/table-9
+		 * has
+		 *     [fruit]
+		 *     apple.color = "red"
+		 *     [fruit.apple.texture]
+		 * so a header may pass *through* apple and add a new
+		 * sub-table to it; what it may not do is land on apple, and
+		 * that is caught by the final-key rules instead. */
 		if (e->val->flags & F_INLINE) {
 			err(p, at, "cannot extend an inline table");
-			return NULL;
-		}
-		if (e->val->flags & F_DOTTED) {
-			err(p, at, "cannot extend a table defined by a "
-			    "dotted key");
 			return NULL;
 		}
 		return e->val;

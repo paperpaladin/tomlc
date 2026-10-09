@@ -601,10 +601,11 @@ rej '[a]\nb = {c = 1}\n[a.b.d]'       'a header through an inline table'
 rej '[a]\nb = {c = 1}\nb.d = 2'       'a dotted key over an inline table'
 rej 'a = {b = 1}\na.c = 2'            'a dotted key into a top-level inline table'
 rej '[a]\nb.c = 1\n[a.b]'             'a header over a dotted-key table'
-rej '[a]\nb.c = 1\n[a.b.d]'           'a header through a dotted-key table'
+acc '[a]\nb.c = 1\n[a.b.d]\nx = 1'    'a header through a dotted-key table, adding a new sub-table'
 rej '[a]\nb.c.d = 1\n[a.b.c]'         'a header over a deeper dotted-key table'
+acc '[a]\nb.c.d = 1\n[a.b.c.e]\nx = 1' 'a header two levels through a dotted-key table'
 rej '[a]\nb.c = 1\n[[a.b]]'           'an array of tables over a dotted-key table'
-rej 'a.b = 1\n[[a.c]]'                'an array of tables through a dotted-key table'
+acc 'a.b = 1\n[[a.c]]'                'an array of tables through a dotted-key table'
 rej '[a.b]\nc = 1\n[a]\nb.d = 2'      'a dotted key into a table from a header'
 rej '[a]\n[a.b]\n[a.b]'               'the same nested table twice'
 rej '[a]\n[a.b]\nc = 1\n[a.b]\nc = 2' 'the same nested table twice with keys'
@@ -692,6 +693,43 @@ jchk 'a = 1979-05-27'             '{"a":{"type":"date-local","value":"1979-05-27
 jchk 'a = 07:32:00.999'           '{"a":{"type":"time-local","value":"07:32:00.999"}}'
 jchk 'a = 1979-05-27T00:32:00-07:00' '{"a":{"type":"datetime","value":"1979-05-27T00:32:00-07:00"}}'
 jchk '"" = 1'            '{"":{"type":"integer","value":"1"}}'
+
+# --- toml-test conformance -------------------------------------------------
+# github.com/toml-lang/toml-test, MIT, the TOML authors.  Vendored as a 48KB
+# tarball under t/ so this needs no network; see README for provenance.  The
+# subset is the suite's own tests/files-toml-1.0.0 list, so the denominator is
+# their choice and not ours: 208 valid documents with their expected JSON and
+# 501 invalid ones.
+#
+# Any exit status outside {0,1} counts as a failure whatever the filename
+# asks for: a segfault satisfies "did not exit 0", so a harness written as
+# `! ./tomlc "$f"` scores a crash as a pass.  t/oracle.py does not.
+printf '\n--- toml-test conformance (TOML 1.0.0 file list)\n'
+CORPUS=$SCRATCH/corpus
+if [ ! -f "$CORPUS/files-toml-1.0.0" ]; then
+	mkdir -p "$CORPUS"
+	tar xzf t/toml-test-1.0.0.tar.gz -C "$CORPUS" 2>/dev/null \
+		|| nok "extract t/toml-test-1.0.0.tar.gz"
+fi
+if [ ! -f "$CORPUS/files-toml-1.0.0" ]; then
+	nok "vendored toml-test corpus present"
+else
+	python3 t/oracle.py suite ./tomlc "$CORPUS" \
+		--pin "$SCRATCH/suite.txt" 2>&1 | tee -a "$OUT"
+	# The score is asserted, not just printed: a regression has to fail
+	# the suite rather than quietly score lower.
+	if grep -q '^SCORE valid accepted with the expected value: 208/208$' "$OUT"
+	then ok "score: 208/208 valid files accepted with the expected value"
+	else nok "score: the valid-file score is not 208/208"; fi
+	if grep -q '^SCORE invalid rejected: 501/501$' "$OUT"
+	then ok "score: 501/501 invalid files rejected"
+	else nok "score: the invalid-file score is not 501/501"; fi
+	# And the per-file verdicts are pinned, so a change that keeps the
+	# totals but moves a file still fails.
+	if diff -u t/suite.expected "$SCRATCH/suite.txt" > "$SCRATCH/suite.diff" 2>&1
+	then ok "per-file verdicts match t/suite.expected"
+	else nok "per-file verdicts changed"; cat "$SCRATCH/suite.diff"; fi
+fi
 
 pass=$(grep -c '^ok - ' "$OUT")
 fail=$(grep -c '^not ok - ' "$OUT")
