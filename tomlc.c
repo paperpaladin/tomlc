@@ -955,19 +955,46 @@ static int parse_header(P *p, toml_value **cur)
 
 /* ------------------------------------------------------------------ parser */
 
+/* One step of a dotted key's path.  A dotted key may create intermediate
+ * tables and may extend ones it created itself, but only inside the body it
+ * created them in: that is what the epoch records.  Everything else -- a
+ * table from a header, an implicit table from a header prefix, an inline
+ * table, an array, a scalar -- is closed to it. */
+static toml_value *dot_descend(P *p, toml_value *t, toml_value *key, size_t at)
+{
+	struct toml_kv *e = tbl_find(t, key->s, key->slen);
+	toml_value *n;
+	if (e) {
+		if (e->val->type != TOML_TABLE)
+			return err(p, at, "cannot extend a non-table key"), NULL;
+		if (!(e->val->flags & F_DOTTED) || e->val->epoch != t->epoch)
+			return err(p, at, "cannot extend that table with a "
+				   "dotted key"), NULL;
+		return e->val;
+	}
+	n = node(p, TOML_TABLE);
+	n->flags = F_DOTTED;
+	n->epoch = t->epoch;
+	tbl_put(p, t, key, n);
+	return n;
+}
+
 static int parse_keyval(P *p, toml_value *t)
 {
-	toml_value *k, *v;
+	toml_value *parts[MAX_PARTS], *v;
 	size_t kpos = p->pos;
-	if (!(k = parse_keypart(p))) return 0;
+	int np, i;
+	if (!parse_keypath(p, parts, &np)) return 0;
 	skip_ws(p);
 	if (AT(p) != '=') return err(p, p->pos, "expected '=' after key");
 	p->pos++;
 	skip_ws(p);
 	if (!(v = parse_value(p))) return 0;
-	if (tbl_find(t, k->s, k->slen))
+	for (i = 0; i < np - 1; i++)
+		if (!(t = dot_descend(p, t, parts[i], kpos))) return 0;
+	if (tbl_find(t, parts[np - 1]->s, parts[np - 1]->slen))
 		return err(p, kpos, "duplicate key");
-	tbl_put(p, t, k, v);
+	tbl_put(p, t, parts[np - 1], v);
 	return 1;
 }
 
