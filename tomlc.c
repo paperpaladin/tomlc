@@ -989,6 +989,12 @@ static toml_value *hdr_descend(P *p, toml_value *t, toml_value *key, size_t at)
 	struct toml_kv *e = tbl_find(t, key->s, key->slen);
 	toml_value *n;
 	if (e) {
+		/* "Each double-bracketed sub-table will belong to the most
+		 * recently defined table element above it", so a path step
+		 * through an array of tables lands in its last element. */
+		if (e->val->type == TOML_ARRAY && (e->val->flags & F_AOT) &&
+		    e->val->narr)
+			return e->val->arr[e->val->narr - 1];
 		if (e->val->type != TOML_TABLE) {
 			err(p, at, "cannot use a non-table key as a table");
 			return NULL;
@@ -1005,21 +1011,47 @@ static int parse_header(P *p, toml_value **cur)
 {
 	toml_value *parts[MAX_PARTS], *t = p->root;
 	struct toml_kv *e;
-	int np, i;
+	int np, i, aot = 0;
 	size_t at = p->pos;
 
 	p->pos++;				/* '[' */
+	if (AT(p) == '[') { aot = 1; p->pos++; }
 	skip_ws(p);
 	if (!parse_keypath(p, parts, &np)) return 0;
 	skip_ws(p);
 	if (AT(p) != ']') return err(p, p->pos, "expected ']' after a table header");
 	p->pos++;
+	if (aot) {
+		if (AT(p) != ']')
+			return err(p, p->pos, "expected ']]' after an "
+				   "array-of-tables header");
+		p->pos++;
+	}
 	if (!expect_eol(p)) return 0;
 
 	for (i = 0; i < np - 1; i++)
 		if (!(t = hdr_descend(p, t, parts[i], at))) return 0;
 
 	e = tbl_find(t, parts[np - 1]->s, parts[np - 1]->slen);
+	if (aot) {
+		toml_value *a, *n;
+		if (e) {
+			if (e->val->type != TOML_ARRAY || !(e->val->flags & F_AOT))
+				return err(p, at, "cannot append to that key "
+					   "with [[...]]");
+			a = e->val;
+		} else {
+			a = node(p, TOML_ARRAY);
+			a->flags = F_AOT;
+			tbl_put(p, t, parts[np - 1], a);
+		}
+		n = node(p, TOML_TABLE);
+		n->flags = F_EXPLICIT;
+		n->epoch = ++p->epoch;
+		arr_push(p, a, n);
+		*cur = n;
+		return 1;
+	}
 	if (!e) {
 		toml_value *n = node(p, TOML_TABLE);
 		n->flags = F_EXPLICIT;
