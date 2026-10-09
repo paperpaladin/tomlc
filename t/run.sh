@@ -823,6 +823,28 @@ python3 -c 'print("{b = "*5000 + "1" + "}"*5000)' >> "$SCRATCH/deep.toml"
 if [ $? -eq 1 ]; then ok "5000 nested inline tables is an error, not a crash"
 else nok "5000 nested inline tables"; fi
 
+# --- error messages --------------------------------------------------------
+# The README documents this format, so the format is asserted.  Byte offsets
+# alone print as "tomlc: file:1000: ..." which reads as a line number, hence
+# line:column with the offset in brackets.
+printf '\n--- error messages\n'
+msg() { # msg <input> <expected stderr tail>
+	got=$(printf '%b' "$1" | ./tomlc 2>&1 >/dev/null)
+	want="tomlc: <stdin>:$2"
+	if [ "$got" = "$want" ]; then ok "message for $1"
+	else nok "message for $1: got [$got] want [$want]"; fi
+}
+msg 'a = 1\nb = \n'              '2:5: expected a value (byte 10)'
+msg 'a = 01\n'                   '1:5: leading zero (byte 4)'
+msg '[a]\n[a]\n'                 '2:1: table defined twice (byte 4)'
+msg 'a = "x\n'                   '1:5: unterminated string (byte 4)'
+msg 'a = 9223372036854775808\n'  '1:5: integer out of range for 64 bits (byte 4)'
+msg 'x\n'                        '1:2: expected '"'"'='"'"' after key (byte 1)'
+msg 'a = 1\na = 2\n'             '2:1: duplicate key (byte 6)'
+msg 'a = {b = 1,}\n'             '1:12: trailing comma in an inline table (byte 11)'
+msg '\n\n\na = 1988-02-30\n'     '4:5: day out of range for that month (byte 7)'
+msg 'a = 1\nb'                   '2:2: expected '"'"'='"'"' after key (byte 7)'
+
 pass=$(grep -c '^ok - ' "$OUT")
 fail=$(grep -c '^not ok - ' "$OUT")
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
