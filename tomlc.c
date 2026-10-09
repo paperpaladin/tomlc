@@ -853,7 +853,40 @@ static int looks_like_datetime(P *p)
 
 /* ------------------------------------------------------------------ values */
 
-static toml_value *parse_value(P *p)
+static toml_value *parse_value(P *p);
+static int parse_keyval(P *p, toml_value *t);
+
+/* An inline table is closed the moment it ends: no header and no dotted key
+ * may ever add to it.  TOML 1.0.0 also forbids a newline anywhere inside one,
+ * which falls out of using skip_ws (space and tab) and never skip_blank. */
+static toml_value *parse_inline_table(P *p)
+{
+	toml_value *v = node(p, TOML_TABLE);
+	size_t at = p->pos;
+	v->flags = F_INLINE | F_EXPLICIT;
+	v->epoch = ++p->epoch;
+	p->pos++;
+	skip_ws(p);
+	if (AT(p) == '}') { p->pos++; return v; }
+	for (;;) {
+		if (EOFP(p)) return err(p, at, "unterminated inline table"), NULL;
+		if (!parse_keyval(p, v)) return NULL;
+		skip_ws(p);
+		if (AT(p) == ',') {
+			p->pos++;
+			skip_ws(p);
+			if (AT(p) == '}')
+				return err(p, p->pos, "trailing comma in an "
+					   "inline table"), NULL;
+			continue;
+		}
+		if (AT(p) == '}') { p->pos++; return v; }
+		return err(p, p->pos, "expected ',' or '}' in an inline "
+			   "table"), NULL;
+	}
+}
+
+static toml_value *parse_value_1(P *p)
 {
 	if (AT(p) == '"' || AT(p) == '\'') return parse_string(p);
 	if (p->len - p->pos >= 4 && !memcmp(p->p + p->pos, "true", 4)) {
@@ -866,12 +899,30 @@ static toml_value *parse_value(P *p)
 		p->pos += 5; v->b = 0;
 		return v;
 	}
+	if (AT(p) == '{') return parse_inline_table(p);
 	if (looks_like_datetime(p)) return parse_datetime(p);
 	if ((AT(p) >= '0' && AT(p) <= '9') || AT(p) == '+' || AT(p) == '-' ||
 	    AT(p) == 'i' || AT(p) == 'n')
 		return parse_number(p);
 	err(p, p->pos, "expected a value");
 	return NULL;
+}
+
+/* The recursion guard.  Inline tables and arrays nest, and a 100000-deep
+ * document is an error return and not a SIGSEGV: a crash is not a rejection.
+ * shortcut: a fixed depth of 200, which is far above anything real and far
+ * below the stack; make it an option only if someone complains. */
+static toml_value *parse_value(P *p)
+{
+	toml_value *v;
+	if (++p->depth > MAX_DEPTH) {
+		p->depth--;
+		err(p, p->pos, "nesting too deep");
+		return NULL;
+	}
+	v = parse_value_1(p);
+	p->depth--;
+	return v;
 }
 
 /* ------------------------------------------------------------ table syntax */
