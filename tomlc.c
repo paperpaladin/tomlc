@@ -708,6 +708,149 @@ static toml_value *parse_number(P *p)
 	return v;
 }
 
+/* ------------------------------------------------------------- date-times */
+
+static int days_in_month(int y, int m)
+{
+	static const int d[] = { 31,28,31,30,31,30,31,31,30,31,30,31 };
+	if (m == 2 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0)) return 29;
+	return d[m - 1];
+}
+
+/* Exactly ndig digits, copied into v and returned as a number.  "Exactly" is
+ * the point: 1:32:00 and 01:32:0 are both errors, and so is 10000-01-01. */
+static int dnum(P *p, toml_value *v, int ndig, int *out)
+{
+	int val = 0, i;
+	for (i = 0; i < ndig; i++) {
+		if (EOFP(p) || AT(p) < '0' || AT(p) > '9')
+			return err(p, p->pos, "expected %d digits in a date-time",
+				   ndig);
+		val = val * 10 + (AT(p) - '0');
+		sput(p, v, (int)AT(p));
+		p->pos++;
+	}
+	*out = val;
+	return 1;
+}
+
+static int dlit(P *p, toml_value *v, int c)
+{
+	if (AT(p) != c) return err(p, p->pos, "expected '%c' in a date-time", c);
+	sput(p, v, c);
+	p->pos++;
+	return 1;
+}
+
+static int parse_date_part(P *p, toml_value *v)
+{
+	int y, m, d;
+	size_t at = p->pos;
+	if (!dnum(p, v, 4, &y) || !dlit(p, v, '-') || !dnum(p, v, 2, &m) ||
+	    !dlit(p, v, '-') || !dnum(p, v, 2, &d))
+		return 0;
+	if (m < 1 || m > 12) return err(p, at, "month out of range");
+	if (d < 1 || d > days_in_month(y, m))
+		return err(p, at, "day out of range for that month");
+	return 1;
+}
+
+/* Seconds are mandatory in TOML 1.0.0 (optional only in 1.1), and 60 is
+ * allowed because a leap second is a real time of day. */
+static int parse_time_part(P *p, toml_value *v)
+{
+	int h, mi, s;
+	size_t at = p->pos;
+	if (!dnum(p, v, 2, &h) || !dlit(p, v, ':') || !dnum(p, v, 2, &mi) ||
+	    !dlit(p, v, ':') || !dnum(p, v, 2, &s))
+		return 0;
+	if (h > 23) return err(p, at, "hour out of range");
+	if (mi > 59) return err(p, at, "minute out of range");
+	if (s > 60) return err(p, at, "second out of range");
+	if (AT(p) == '.') {
+		sput(p, v, '.');
+		p->pos++;
+		if (EOFP(p) || AT(p) < '0' || AT(p) > '9')
+			return err(p, p->pos, "fractional second with no digits");
+		while (!EOFP(p) && AT(p) >= '0' && AT(p) <= '9')
+			sput(p, v, p->p[p->pos++]);
+	}
+	return 1;
+}
+
+static int parse_offset(P *p, toml_value *v)
+{
+	int h, mi;
+	size_t at = p->pos;
+	if (AT(p) == 'Z' || AT(p) == 'z') { sput(p, v, 'Z'); p->pos++; return 1; }
+	sput(p, v, (int)AT(p));
+	p->pos++;
+	if (!dnum(p, v, 2, &h) || !dlit(p, v, ':') || !dnum(p, v, 2, &mi))
+		return 0;
+	if (h > 23) return err(p, at, "offset hour out of range");
+	if (mi > 59) return err(p, at, "offset minute out of range");
+	return 1;
+}
+
+/* A date at the value position is the only place in TOML where a space can
+ * appear inside a single value, so the space separator is taken only when a
+ * time really follows it; "d = 1979-05-27 # comment" is a local date. */
+static int space_then_time(P *p)
+{
+	return AT(p) == ' ' && p->pos + 3 < p->len &&
+	       p->p[p->pos + 1] >= '0' && p->p[p->pos + 1] <= '9' &&
+	       p->p[p->pos + 2] >= '0' && p->p[p->pos + 2] <= '9' &&
+	       p->p[p->pos + 3] == ':';
+}
+
+static toml_value *parse_datetime(P *p)
+{
+	toml_value *v = snode(p, TOML_DATE_LOCAL);
+	int c;
+	if (p->pos + 4 < p->len && p->p[p->pos + 4] == '-') {
+		if (!parse_date_part(p, v)) return NULL;
+		c = AT(p);
+		if (c == 'T' || c == 't' || space_then_time(p)) {
+			p->pos++;
+			sput(p, v, 'T');
+			if (!parse_time_part(p, v)) return NULL;
+			v->type = TOML_DATETIME_LOCAL;
+			c = AT(p);
+			if (c == 'Z' || c == 'z' || c == '+' || c == '-') {
+				if (!parse_offset(p, v)) return NULL;
+				v->type = TOML_DATETIME;
+			}
+		}
+	} else {
+		if (!parse_time_part(p, v)) return NULL;
+		v->type = TOML_TIME_LOCAL;
+	}
+	if (!EOFP(p) && tok_char(AT(p))) {
+		err(p, p->pos, "trailing junk after a date-time");
+		return NULL;
+	}
+	return v;
+}
+
+/* Is the value at p a date-time rather than a number?  YYYY- or HH:. */
+static int looks_like_datetime(P *p)
+{
+	size_t i;
+	if (p->pos + 4 < p->len && p->p[p->pos + 4] == '-') {
+		for (i = 0; i < 4; i++)
+			if (p->p[p->pos + i] < '0' || p->p[p->pos + i] > '9')
+				return 0;
+		return 1;
+	}
+	if (p->pos + 2 < p->len && p->p[p->pos + 2] == ':') {
+		for (i = 0; i < 2; i++)
+			if (p->p[p->pos + i] < '0' || p->p[p->pos + i] > '9')
+				return 0;
+		return 1;
+	}
+	return 0;
+}
+
 /* ------------------------------------------------------------------ values */
 
 static toml_value *parse_value(P *p)
@@ -723,6 +866,7 @@ static toml_value *parse_value(P *p)
 		p->pos += 5; v->b = 0;
 		return v;
 	}
+	if (looks_like_datetime(p)) return parse_datetime(p);
 	if ((AT(p) >= '0' && AT(p) <= '9') || AT(p) == '+' || AT(p) == '-' ||
 	    AT(p) == 'i' || AT(p) == 'n')
 		return parse_number(p);
