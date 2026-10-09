@@ -4,7 +4,10 @@
 # override.  -ffile-prefix-map keeps the build reproducible: without it -g
 # writes $(CURDIR) into DWARF .debug_line_str.
 
-CC      ?= gcc
+# GNU make predefines CC as `cc`, so ?= would never fire.
+ifeq ($(origin CC),default)
+CC = gcc
+endif
 CFLAGS  ?= -std=c11 -Wall -Wextra -Wpedantic -O2 -g -ffile-prefix-map=$(CURDIR)=.
 ASAN     = -std=c11 -Wall -Wextra -Wpedantic -O1 -g -ffile-prefix-map=$(CURDIR)=. \
 	   -fsanitize=address,undefined -fno-omit-frame-pointer

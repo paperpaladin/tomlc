@@ -219,12 +219,6 @@ static void sput(P *p, toml_value *v, int c)
 	v->s[v->slen] = '\0';
 }
 
-static void sputn(P *p, toml_value *v, const void *b, size_t n)
-{
-	size_t i;
-	for (i = 0; i < n; i++) sput(p, v, ((const unsigned char *)b)[i]);
-}
-
 /* A node with an allocated, empty text buffer. */
 static toml_value *snode(P *p, int type)
 {
@@ -233,6 +227,103 @@ static toml_value *snode(P *p, int type)
 	v->s = xrealloc(NULL, v->scap);
 	v->s[0] = '\0';
 	return v;
+}
+
+/* ----------------------------------------------------------------- strings */
+
+static int hexval(int c)
+{
+	if (c >= '0' && c <= '9') return c - '0';
+	if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+	return -1;
+}
+
+static void put_cp(P *p, toml_value *v, unsigned long cp)
+{
+	if (cp < 0x80) { sput(p, v, (int)cp); return; }
+	if (cp < 0x800) {
+		sput(p, v, (int)(0xc0 | (cp >> 6)));
+	} else if (cp < 0x10000) {
+		sput(p, v, (int)(0xe0 | (cp >> 12)));
+		sput(p, v, (int)(0x80 | ((cp >> 6) & 0x3f)));
+	} else {
+		sput(p, v, (int)(0xf0 | (cp >> 18)));
+		sput(p, v, (int)(0x80 | ((cp >> 12) & 0x3f)));
+		sput(p, v, (int)(0x80 | ((cp >> 6) & 0x3f)));
+	}
+	sput(p, v, (int)(0x80 | (cp & 0x3f)));
+}
+
+/* \uXXXX and \UXXXXXXXX must name a Unicode scalar value: a lone surrogate
+ * has no UTF-8 encoding, so there is nothing to put in the buffer.  Rejecting
+ * it also keeps the dumper total -- no document that parses can fail to
+ * serialise. */
+static int read_u(P *p, toml_value *v, int n)
+{
+	unsigned long cp = 0;
+	size_t at = p->pos - 2;
+	int i, h;
+	for (i = 0; i < n; i++) {
+		if (EOFP(p) || (h = hexval(AT(p))) < 0)
+			return err(p, p->pos, "\\%c needs %d hex digits",
+				   n == 4 ? 'u' : 'U', n);
+		cp = cp * 16 + (unsigned long)h;
+		p->pos++;
+	}
+	if (cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff))
+		return err(p, at, "escape is not a Unicode scalar value");
+	put_cp(p, v, cp);
+	return 1;
+}
+
+/* The escape set is closed in TOML 1.0.0: no \x, no \e, no \', no \/. */
+static int read_escape(P *p, toml_value *v)
+{
+	int c;
+	p->pos++;				/* the backslash */
+	if (EOFP(p)) return err(p, p->pos, "unterminated escape");
+	c = AT(p);
+	p->pos++;
+	switch (c) {
+	case 'b': sput(p, v, '\b'); return 1;
+	case 't': sput(p, v, '\t'); return 1;
+	case 'n': sput(p, v, '\n'); return 1;
+	case 'f': sput(p, v, '\f'); return 1;
+	case 'r': sput(p, v, '\r'); return 1;
+	case '"': sput(p, v, '"'); return 1;
+	case '\\': sput(p, v, '\\'); return 1;
+	case 'u': return read_u(p, v, 4);
+	case 'U': return read_u(p, v, 8);
+	default:  return err(p, p->pos - 2, "unknown escape");
+	}
+}
+
+/* Single-line basic string.  p->pos is on the opening quote.  Control
+ * characters are out, tab excepted, and so is DEL: the 1.0.0 ABNF's
+ * basic-unescaped stops at %x7E. */
+static toml_value *parse_basic_string(P *p)
+{
+	toml_value *v = snode(p, TOML_STRING);
+	size_t at = p->pos;
+	p->pos++;
+	for (;;) {
+		unsigned c;
+		if (EOFP(p)) { err(p, at, "unterminated string"); return NULL; }
+		c = AT(p);
+		if (c == '"') { p->pos++; return v; }
+		if (c == '\n' || c == '\r') {
+			err(p, at, "unterminated string");
+			return NULL;
+		}
+		if (c < 0x20 ? c != '\t' : c == 0x7f) {
+			err(p, p->pos, "control character in string");
+			return NULL;
+		}
+		if (c == '\\') { if (!read_escape(p, v)) return NULL; continue; }
+		sput(p, v, (int)c);
+		p->pos++;
+	}
 }
 
 static int is_bare(int c)
@@ -246,6 +337,7 @@ static int is_bare(int c)
 static toml_value *parse_keypart(P *p)
 {
 	toml_value *k;
+	if (AT(p) == '"') return parse_basic_string(p);
 	if (!is_bare(AT(p))) {
 		err(p, p->pos, "expected a key");
 		return NULL;
@@ -281,6 +373,7 @@ static void tbl_put(P *p, toml_value *t, toml_value *key, toml_value *v)
 
 static toml_value *parse_value(P *p)
 {
+	if (AT(p) == '"') return parse_basic_string(p);
 	if (p->len - p->pos >= 4 && !memcmp(p->p + p->pos, "true", 4)) {
 		toml_value *v = node(p, TOML_BOOL);
 		p->pos += 4; v->b = 1;
