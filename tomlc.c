@@ -886,6 +886,38 @@ static toml_value *parse_inline_table(P *p)
 	}
 }
 
+static void arr_push(P *p, toml_value *a, toml_value *v)
+{
+	(void)p;
+	if (a->narr == a->caparr) {
+		a->caparr = a->caparr ? a->caparr * 2 : 8;
+		a->arr = xrealloc(a->arr, a->caparr * sizeof *a->arr);
+	}
+	a->arr[a->narr++] = v;
+}
+
+/* An array, unlike an inline table, may contain newlines and comments
+ * anywhere and may end with a trailing comma.  TOML 1.0.0 dropped the
+ * same-type requirement, so [1, "x", {}] is valid. */
+static toml_value *parse_array(P *p)
+{
+	toml_value *v = node(p, TOML_ARRAY);
+	size_t at = p->pos;
+	p->pos++;
+	for (;;) {
+		toml_value *item;
+		if (!skip_blank(p)) return NULL;
+		if (EOFP(p)) return err(p, at, "unterminated array"), NULL;
+		if (AT(p) == ']') { p->pos++; return v; }
+		if (!(item = parse_value(p))) return NULL;
+		arr_push(p, v, item);
+		if (!skip_blank(p)) return NULL;
+		if (AT(p) == ',') { p->pos++; continue; }
+		if (AT(p) == ']') { p->pos++; return v; }
+		return err(p, p->pos, "expected ',' or ']' in an array"), NULL;
+	}
+}
+
 static toml_value *parse_value_1(P *p)
 {
 	if (AT(p) == '"' || AT(p) == '\'') return parse_string(p);
@@ -899,6 +931,7 @@ static toml_value *parse_value_1(P *p)
 		p->pos += 5; v->b = 0;
 		return v;
 	}
+	if (AT(p) == '[') return parse_array(p);
 	if (AT(p) == '{') return parse_inline_table(p);
 	if (looks_like_datetime(p)) return parse_datetime(p);
 	if ((AT(p) >= '0' && AT(p) <= '9') || AT(p) == '+' || AT(p) == '-' ||
