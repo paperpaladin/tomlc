@@ -618,6 +618,81 @@ rej 'a = 1\n[a.b.c.d]'                'a deep header over an integer'
 rej 'a = {}\n[a]'                     'a header over an empty inline table'
 rej 'a = {}\n[[a]]'                   'an array of tables over an empty inline table'
 
+# --- the JSON dumper -------------------------------------------------------
+# The first checks in this suite that look at the parsed *value* rather than
+# the verdict.  Everything before this commit was accept/reject only, so the
+# multi-line trimming rules in particular were unproven.  Both sides go
+# through printf '%b', so a backslash in the expected JSON is doubled here.
+printf '\n--- json dumper\n'
+jchk() { # jchk <toml> <expected json>
+	got=$(printf '%b' "$1" | ./tomlc -j 2>&1)
+	want=$(printf '%b' "$2")
+	if [ "$got" = "$want" ]; then ok "dump $1"
+	else nok "dump $1 (got [$got] want [$want])"; fi
+}
+jchk ''                 '{}'
+jchk 'a = 1'            '{"a":{"type":"integer","value":"1"}}'
+jchk 'a = 0x10'         '{"a":{"type":"integer","value":"16"}}'
+jchk 'a = 0o10'         '{"a":{"type":"integer","value":"8"}}'
+jchk 'a = 0b10'         '{"a":{"type":"integer","value":"2"}}'
+jchk 'a = 1_0'          '{"a":{"type":"integer","value":"10"}}'
+jchk 'a = -0'           '{"a":{"type":"integer","value":"0"}}'
+jchk 'a = +0'           '{"a":{"type":"integer","value":"0"}}'
+jchk 'a = 9223372036854775807'  '{"a":{"type":"integer","value":"9223372036854775807"}}'
+jchk 'a = -9223372036854775808' '{"a":{"type":"integer","value":"-9223372036854775808"}}'
+jchk 'a = 0.1'          '{"a":{"type":"float","value":"0.1"}}'
+jchk 'a = 3.14'         '{"a":{"type":"float","value":"3.14"}}'
+jchk 'a = 1e2'          '{"a":{"type":"float","value":"100"}}'
+jchk 'a = 3e1_4'        '{"a":{"type":"float","value":"3e+14"}}'
+jchk 'a = -0.0'         '{"a":{"type":"float","value":"-0"}}'
+jchk 'a = inf'          '{"a":{"type":"float","value":"inf"}}'
+jchk 'a = -inf'         '{"a":{"type":"float","value":"-inf"}}'
+jchk 'a = nan'          '{"a":{"type":"float","value":"nan"}}'
+jchk 'a = -nan'         '{"a":{"type":"float","value":"nan"}}'
+jchk 'a = true'         '{"a":{"type":"bool","value":"true"}}'
+jchk 'a = false'        '{"a":{"type":"bool","value":"false"}}'
+jchk 'a = "x"'          '{"a":{"type":"string","value":"x"}}'
+jchk 'a = "\\u0041"'     '{"a":{"type":"string","value":"A"}}'
+jchk 'a = "\\u00e9"'     '{"a":{"type":"string","value":"\303\251"}}'
+jchk 'a = "\\U0001F600"' '{"a":{"type":"string","value":"\360\237\230\200"}}'
+jchk 'a = "\\u0000"'     '{"a":{"type":"string","value":"\\u0000"}}'
+jchk 'a = "\\t\\n"'       '{"a":{"type":"string","value":"\\t\\n"}}'
+jchk 'a = "a\\"b"'       '{"a":{"type":"string","value":"a\\"b"}}'
+jchk "a = 'a\\\\b'"       '{"a":{"type":"string","value":"a\\\\b"}}'
+# The multi-line rules.  Each of these has a wrong answer that still parses.
+jchk 'a = """\nx"""'     '{"a":{"type":"string","value":"x"}}'
+jchk 'a = """\n\nx"""'   '{"a":{"type":"string","value":"\\nx"}}'
+jchk 'a = """x\ny"""'    '{"a":{"type":"string","value":"x\\ny"}}'
+jchk 'a = """x\r\ny"""'  '{"a":{"type":"string","value":"x\\ny"}}'
+jchk 'a = """x\\\n   y"""'        '{"a":{"type":"string","value":"xy"}}'
+jchk 'a = """x\\   \n\n\n   y"""' '{"a":{"type":"string","value":"xy"}}'
+jchk 'a = """x\\\n"""'            '{"a":{"type":"string","value":"x"}}'
+jchk 'a = """"x"""'      '{"a":{"type":"string","value":"\\"x"}}'
+jchk 'a = """x""""'      '{"a":{"type":"string","value":"x\\""}}'
+jchk 'a = """x"""""'     '{"a":{"type":"string","value":"x\\"\\""}}'
+jchk 'a = """x""y"""'    '{"a":{"type":"string","value":"x\\"\\"y"}}'
+jchk "a = '''\nx'''"     '{"a":{"type":"string","value":"x"}}'
+jchk "a = '''x\\\\ny'''"  '{"a":{"type":"string","value":"x\\\\ny"}}'
+jchk "a = '''x''''"      '{"a":{"type":"string","value":"x\047"}}'
+# Structure.
+jchk 'a = []'            '{"a":[]}'
+jchk 'a = [1, 2]'        '{"a":[{"type":"integer","value":"1"},{"type":"integer","value":"2"}]}'
+jchk 'a = {}'            '{"a":{}}'
+jchk 'a = {b = 1}'       '{"a":{"b":{"type":"integer","value":"1"}}}'
+jchk 'a.b.c = 1'         '{"a":{"b":{"c":{"type":"integer","value":"1"}}}}'
+jchk '[a]\nb = 1'        '{"a":{"b":{"type":"integer","value":"1"}}}'
+jchk '[a.b]\nc = 1'      '{"a":{"b":{"c":{"type":"integer","value":"1"}}}}'
+jchk '[[a]]\nb = 1\n[[a]]\nb = 2' '{"a":[{"b":{"type":"integer","value":"1"}},{"b":{"type":"integer","value":"2"}}]}'
+jchk '[[a]]\n[a.b]\nc = 1'        '{"a":[{"b":{"c":{"type":"integer","value":"1"}}}]}'
+jchk 'a = 1979-05-27T07:32:00Z'   '{"a":{"type":"datetime","value":"1979-05-27T07:32:00Z"}}'
+jchk 'a = 1979-05-27t07:32:00z'   '{"a":{"type":"datetime","value":"1979-05-27T07:32:00Z"}}'
+jchk 'a = 1979-05-27 07:32:00Z'   '{"a":{"type":"datetime","value":"1979-05-27T07:32:00Z"}}'
+jchk 'a = 1979-05-27T07:32:00'    '{"a":{"type":"datetime-local","value":"1979-05-27T07:32:00"}}'
+jchk 'a = 1979-05-27'             '{"a":{"type":"date-local","value":"1979-05-27"}}'
+jchk 'a = 07:32:00.999'           '{"a":{"type":"time-local","value":"07:32:00.999"}}'
+jchk 'a = 1979-05-27T00:32:00-07:00' '{"a":{"type":"datetime","value":"1979-05-27T00:32:00-07:00"}}'
+jchk '"" = 1'            '{"":{"type":"integer","value":"1"}}'
+
 pass=$(grep -c '^ok - ' "$OUT")
 fail=$(grep -c '^not ok - ' "$OUT")
 printf '\n%s passed, %s failed\n' "$pass" "$fail"

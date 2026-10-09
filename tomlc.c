@@ -1160,6 +1160,117 @@ static int toml_parse(const void *buf, size_t len, P *p)
 	return parse_doc(p);
 }
 
+/* ----------------------------------------------------------- json dumping */
+
+/* toml-test's tagged encoding: every table is a JSON object, every array a
+ * JSON array, and every scalar the object {"type": T, "value": V} where V is
+ * always a string.  Emitting exactly this is what turns conformance into a
+ * plain JSON diff with no judgement in it. */
+static const char *type_tag(int t)
+{
+	switch (t) {
+	case TOML_STRING:         return "string";
+	case TOML_INTEGER:        return "integer";
+	case TOML_FLOAT:          return "float";
+	case TOML_BOOL:           return "bool";
+	case TOML_DATETIME:       return "datetime";
+	case TOML_DATETIME_LOCAL: return "datetime-local";
+	case TOML_DATE_LOCAL:     return "date-local";
+	case TOML_TIME_LOCAL:     return "time-local";
+	}
+	return "?";
+}
+
+static void json_str(FILE *f, const char *s, size_t n)
+{
+	size_t i;
+	fputc('"', f);
+	for (i = 0; i < n; i++) {
+		unsigned char c = (unsigned char)s[i];
+		switch (c) {
+		case '"':  fputs("\\\"", f); break;
+		case '\\': fputs("\\\\", f); break;
+		case '\b': fputs("\\b", f); break;
+		case '\f': fputs("\\f", f); break;
+		case '\n': fputs("\\n", f); break;
+		case '\r': fputs("\\r", f); break;
+		case '\t': fputs("\\t", f); break;
+		default:
+			if (c < 0x20 || c == 0x7f) fprintf(f, "\\u%04x", c);
+			else fputc(c, f);	/* UTF-8 passes through */
+		}
+	}
+	fputc('"', f);
+}
+
+/* The shortest decimal spelling that reads back as the same double.  %.17g
+ * always round-trips but prints 0.1 as 0.10000000000000001, which is a
+ * needlessly ugly thing to hand an oracle. */
+static void fmt_float(char *buf, size_t cap, double d)
+{
+	int prec;
+	if (d != d) { snprintf(buf, cap, "nan"); return; }
+	if (d > 1.7976931348623158e308) { snprintf(buf, cap, "inf"); return; }
+	if (d < -1.7976931348623158e308) { snprintf(buf, cap, "-inf"); return; }
+	/* Shortest *string*, not lowest precision: %.1g of 100 round-trips as
+	 * "1e+02", which is five characters to say three. */
+	{
+		char best[64], try[64];
+		best[0] = '\0';
+		for (prec = 1; prec <= 17; prec++) {
+			snprintf(try, sizeof try, "%.*g", prec, d);
+			if (strtod(try, NULL) != d) continue;
+			if (!best[0] || strlen(try) < strlen(best))
+				snprintf(best, sizeof best, "%s", try);
+		}
+		if (!best[0]) snprintf(best, sizeof best, "%.17g", d);
+		snprintf(buf, cap, "%s", best);
+	}
+}
+
+static void dump(FILE *f, const toml_value *v)
+{
+	char buf[64];
+	size_t i;
+	switch (v->type) {
+	case TOML_TABLE:
+		fputc('{', f);
+		for (i = 0; i < v->nkv; i++) {
+			if (i) fputc(',', f);
+			json_str(f, v->kv[i].key, v->kv[i].klen);
+			fputc(':', f);
+			dump(f, v->kv[i].val);
+		}
+		fputc('}', f);
+		return;
+	case TOML_ARRAY:
+		fputc('[', f);
+		for (i = 0; i < v->narr; i++) {
+			if (i) fputc(',', f);
+			dump(f, v->arr[i]);
+		}
+		fputc(']', f);
+		return;
+	case TOML_INTEGER:
+		snprintf(buf, sizeof buf, "%lld", v->i);
+		break;
+	case TOML_FLOAT:
+		fmt_float(buf, sizeof buf, v->f);
+		break;
+	case TOML_BOOL:
+		snprintf(buf, sizeof buf, "%s", v->b ? "true" : "false");
+		break;
+	default:			/* string and the four date-times */
+		fprintf(f, "{\"type\":\"%s\",\"value\":", type_tag(v->type));
+		json_str(f, v->s, v->slen);
+		fputc('}', f);
+		return;
+	}
+	fprintf(f, "{\"type\":\"%s\",\"value\":", type_tag(v->type));
+	json_str(f, buf, strlen(buf));
+	fputc('}', f);
+}
+
 /* --------------------------------------------------------------------- cli */
 
 static char *slurp(const char *path, size_t *outlen)
@@ -1200,14 +1311,16 @@ int main(int argc, char **argv)
 	char *buf;
 	size_t len = 0;
 	P p;
-	int i, rc;
+	int i, rc, json = 0;
 
 	for (i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-			printf("usage: tomlc [FILE]\n"
-			       "  validates FILE (or stdin); exit 0 valid, 1 invalid\n");
+			printf("usage: tomlc [-j] [FILE]\n"
+			       "  validates FILE (or stdin); exit 0 valid, 1 invalid\n"
+			       "  -j  dump the document as toml-test tagged JSON\n");
 			return 0;
 		}
+		if (!strcmp(argv[i], "-j")) { json = 1; continue; }
 		if (argv[i][0] == '-' && argv[i][1]) {
 			fprintf(stderr, "tomlc: unknown option %s\n", argv[i]);
 			return 2;
@@ -1223,6 +1336,7 @@ int main(int argc, char **argv)
 	}
 	rc = toml_parse(buf, len, &p);
 	if (!rc) report(path ? path : "<stdin>", &p);
+	else if (json) { dump(stdout, p.root); fputc('\n', stdout); }
 	freeall(&p);
 	free(buf);
 	return rc ? 0 : 1;
