@@ -756,6 +756,73 @@ else
 	else nok "the tomllib divergences changed"; cat "$SCRATCH/py.diff"; fi
 fi
 
+# --- the truncation sweep --------------------------------------------------
+# Every prefix of every corpus file, parsed and freed in one process.  The
+# verdicts are meaningless; the point is that no truncated document crashes,
+# overruns, hangs or leaks.  `make test-asan` is where that gets proved --
+# under plain gcc this section only catches a crash.
+printf '\n--- truncation sweep over the corpus\n'
+if [ ! -f "$CORPUS/files-toml-1.0.0" ]; then
+	nok "truncation sweep: corpus missing"
+else
+	bad=0
+	total=0
+	for f in $(grep '\.toml$' "$CORPUS/files-toml-1.0.0"); do
+		out=$(./tomlc -S "$CORPUS/$f" 2>&1)
+		st=$?
+		if [ "$st" -ne 0 ]; then
+			bad=$((bad + 1))
+			printf 'SWEEP FAILED exit %s: %s\n%s\n' "$st" "$f" "$out"
+		else
+			n=${out#swept }
+			total=$((total + ${n%% *}))
+		fi
+	done
+	say "SWEEP $total truncated documents parsed across 709 corpus files"
+	if [ "$bad" -eq 0 ]
+	then ok "every prefix of every corpus file parsed without crashing"
+	else nok "$bad corpus files crashed during the truncation sweep"; fi
+	if [ "$total" -gt 40000 ]
+	then ok "the sweep really ran ($total parses, not zero)"
+	else nok "the sweep parsed only $total documents, which is too few"; fi
+fi
+
+# The shapes the corpus does not contain: an escape cut in half, a multi-line
+# delimiter cut between its quotes, a date-time cut at every field boundary,
+# an inline table cut mid-key.
+printf '\n--- truncation sweep over hand-written edge shapes\n'
+for s in 'a = "\\u0041"' 'a = """x\\\n  y"""' "a = '''x''''" 'a = 1979-05-27T00:32:00.999-07:00' \
+	 'a = {b.c = 1, d = [1, {e = 2}]}' '[[a.b]]\nc.d = 1\n[a]\nb = 2' \
+	 'a = """x""""' 'a = 0xdead_beef' 'a = """\\\n"""' '[a]\nb.c = 1\n[a.b.d]\nx = 1'; do
+	printf '%b' "$s" > "$SCRATCH/sweep.toml"
+	if ./tomlc -S "$SCRATCH/sweep.toml" > /dev/null 2>&1
+	then ok "sweep $s"
+	else nok "sweep $s"; fi
+done
+
+# --- hostile input ---------------------------------------------------------
+# Not an oracle, a smoke test: random bytes must be rejected, not crash.
+printf '\n--- hostile input\n'
+head -c 400000 /dev/urandom > "$SCRATCH/random.bin"
+./tomlc "$SCRATCH/random.bin" > /dev/null 2>&1
+st=$?
+if [ "$st" -eq 0 ] || [ "$st" -eq 1 ]
+then ok "400kB of /dev/urandom: exit $st"
+else nok "400kB of /dev/urandom: exit $st"; fi
+if ./tomlc -S "$SCRATCH/random.bin" > /dev/null 2>&1
+then ok "truncation sweep over 400kB of /dev/urandom"
+else nok "truncation sweep over 400kB of /dev/urandom"; fi
+printf 'a = ' > "$SCRATCH/deep.toml"
+python3 -c 'print("["*5000 + "]"*5000)' >> "$SCRATCH/deep.toml"
+./tomlc "$SCRATCH/deep.toml" > /dev/null 2>&1
+if [ $? -eq 1 ]; then ok "5000 nested arrays is an error, not a crash"
+else nok "5000 nested arrays"; fi
+printf 'a = ' > "$SCRATCH/deep.toml"
+python3 -c 'print("{b = "*5000 + "1" + "}"*5000)' >> "$SCRATCH/deep.toml"
+./tomlc "$SCRATCH/deep.toml" > /dev/null 2>&1
+if [ $? -eq 1 ]; then ok "5000 nested inline tables is an error, not a crash"
+else nok "5000 nested inline tables"; fi
+
 pass=$(grep -c '^ok - ' "$OUT")
 fail=$(grep -c '^not ok - ' "$OUT")
 printf '\n%s passed, %s failed\n' "$pass" "$fail"

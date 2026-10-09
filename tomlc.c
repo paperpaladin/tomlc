@@ -1294,6 +1294,11 @@ static char *slurp(const char *path, size_t *outlen)
 	}
 	if (ferror(f)) { free(b); if (path) fclose(f); return NULL; }
 	if (path) fclose(f);
+	/* Shrink to exactly n.  An over-allocated buffer makes a sanitizer
+	 * run come back clean on a real off-by-one, because the byte past the
+	 * end of the document is still inside the allocation.  That is the
+	 * bug that makes a memory-safety claim worthless. */
+	b = xrealloc(b, n ? n : 1);
 	*outlen = n;
 	return b;
 }
@@ -1310,22 +1315,47 @@ static void report(const char *name, P *p)
 		name, line, col, p->err, p->errpos);
 }
 
+/* Parse every prefix of the buffer.  The verdicts are meaningless; the point
+ * is that no truncated document crashes, overruns, hangs or leaks, and under
+ * `make test-asan` this is where that gets proved.  Every corpus file is a
+ * few hundred malformed documents we did not have to invent. */
+static void sweep(const char *buf, size_t len)
+{
+	size_t i;
+	for (i = 0; i <= len; i++) {
+		P p;
+		/* A fresh allocation of exactly i bytes per prefix, for the
+		 * same reason slurp shrinks: a read one past the end of the
+		 * prefix has to land in a redzone, not in the rest of the
+		 * document. */
+		char *cut = xrealloc(NULL, i ? i : 1);
+		memcpy(cut, buf, i);
+		toml_parse(cut, i, &p);
+		freeall(&p);
+		free(cut);
+	}
+	printf("swept %zu prefixes\n", len + 1);
+}
+
 int main(int argc, char **argv)
 {
 	const char *path = NULL;
 	char *buf;
 	size_t len = 0;
 	P p;
-	int i, rc, json = 0;
+	int i, rc, json = 0, swp = 0;
 
 	for (i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-			printf("usage: tomlc [-j] [FILE]\n"
+			printf("usage: tomlc [-j|-S] [FILE]\n"
 			       "  validates FILE (or stdin); exit 0 valid, 1 invalid\n"
-			       "  -j  dump the document as toml-test tagged JSON\n");
+			       "  -j  dump the document as toml-test tagged JSON\n"
+			       "  -S  parse every truncation of FILE and report nothing but\n"
+			       "      that none of them crashed\n");
 			return 0;
 		}
 		if (!strcmp(argv[i], "-j")) { json = 1; continue; }
+		if (!strcmp(argv[i], "-S")) { swp = 1; continue; }
 		if (argv[i][0] == '-' && argv[i][1]) {
 			fprintf(stderr, "tomlc: unknown option %s\n", argv[i]);
 			return 2;
@@ -1339,6 +1369,7 @@ int main(int argc, char **argv)
 			strerror(errno));
 		return 2;
 	}
+	if (swp) { sweep(buf, len); free(buf); return 0; }
 	rc = toml_parse(buf, len, &p);
 	if (!rc) report(path ? path : "<stdin>", &p);
 	else if (json) { dump(stdout, p.root); fputc('\n', stdout); }
