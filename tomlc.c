@@ -654,6 +654,48 @@ static toml_value *parse_number(P *p)
 		p->pos += n;
 		return int_node(p, mag, 0, ovf, at);
 	}
+	/* inf and nan take a sign and nothing else. */
+	if (n - i == 3 && (!memcmp(s + i, "inf", 3) || !memcmp(s + i, "nan", 3))) {
+		v = node(p, TOML_FLOAT);
+		v->f = s[i] == 'i' ? (neg ? -INFINITY : INFINITY) : NAN;
+		p->pos += n;
+		return v;
+	}
+	/* A '.' or an exponent anywhere in the token makes it a float.  The
+	 * base-prefixed forms are already gone, so an 'e' here cannot be a hex
+	 * digit. */
+	if (memchr(s + i, '.', n - i) || memchr(s + i, 'e', n - i) ||
+	    memchr(s + i, 'E', n - i)) {
+		v = snode(p, TOML_FLOAT);
+		if (neg) sput(p, v, '-');
+		if (!digit_run(p, s, n, &i, 10, 0, NULL, NULL, v))
+			return NULL;
+		if (i < n && s[i] == '.') {
+			sput(p, v, '.');
+			i++;
+			if (!digit_run(p, s, n, &i, 10, 1, NULL, NULL, v))
+				return NULL;
+		}
+		if (i < n && (s[i] == 'e' || s[i] == 'E')) {
+			sput(p, v, 'e');
+			i++;
+			if (i < n && (s[i] == '+' || s[i] == '-'))
+				sput(p, v, s[i++]);
+			if (!digit_run(p, s, n, &i, 10, 1, NULL, NULL, v))
+				return NULL;
+		}
+		if (i != n) {
+			err(p, p->pos + i, "trailing junk after a number");
+			return NULL;
+		}
+		/* strtod cannot be the validator -- it accepts 0x10, inf,
+		 * nan, a leading + and leading whitespace, and on "1e" it
+		 * silently consumes just the 1 -- so it only ever sees text
+		 * this function has already proved is a TOML float. */
+		v->f = strtod(v->s, NULL);
+		p->pos += n;
+		return v;
+	}
 	if (!digit_run(p, s, n, &i, 10, 0, &mag, &ovf, NULL))
 		return NULL;
 	if (i != n) {
@@ -681,7 +723,8 @@ static toml_value *parse_value(P *p)
 		p->pos += 5; v->b = 0;
 		return v;
 	}
-	if ((AT(p) >= '0' && AT(p) <= '9') || AT(p) == '+' || AT(p) == '-')
+	if ((AT(p) >= '0' && AT(p) <= '9') || AT(p) == '+' || AT(p) == '-' ||
+	    AT(p) == 'i' || AT(p) == 'n')
 		return parse_number(p);
 	err(p, p->pos, "expected a value");
 	return NULL;
