@@ -42,7 +42,7 @@ struct toml_value {
 	int type;
 	unsigned flags;
 	unsigned epoch;			/* body that may still extend it; see F_DOTTED */
-	char *s; size_t slen;		/* string bytes, or the date-time text */
+	char *s; size_t slen, scap;	/* string bytes, or the date-time text */
 	long long i;
 	double f;
 	int b;
@@ -204,7 +204,114 @@ static int expect_eol(P *p)
 	return err(p, p->pos, "expected newline after statement");
 }
 
+/* -------------------------------------------------------------------- keys */
+
+/* Scalar text is built into a node's own buffer, so a half-built string is
+ * owned by the registry and freed with everything else if the parse fails. */
+static void sput(P *p, toml_value *v, int c)
+{
+	(void)p;
+	if (v->slen + 2 > v->scap) {
+		v->scap = v->scap ? v->scap * 2 : 32;
+		v->s = xrealloc(v->s, v->scap);
+	}
+	v->s[v->slen++] = (char)c;
+	v->s[v->slen] = '\0';
+}
+
+static void sputn(P *p, toml_value *v, const void *b, size_t n)
+{
+	size_t i;
+	for (i = 0; i < n; i++) sput(p, v, ((const unsigned char *)b)[i]);
+}
+
+/* A node with an allocated, empty text buffer. */
+static toml_value *snode(P *p, int type)
+{
+	toml_value *v = node(p, type);
+	v->scap = 32;
+	v->s = xrealloc(NULL, v->scap);
+	v->s[0] = '\0';
+	return v;
+}
+
+static int is_bare(int c)
+{
+	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+	       (c >= '0' && c <= '9') || c == '_' || c == '-';
+}
+
+/* One key part.  Returns a TOML_STRING node used only as a key holder: the
+ * table entry points into its buffer and the registry owns it. */
+static toml_value *parse_keypart(P *p)
+{
+	toml_value *k;
+	if (!is_bare(AT(p))) {
+		err(p, p->pos, "expected a key");
+		return NULL;
+	}
+	k = snode(p, TOML_STRING);
+	while (!EOFP(p) && is_bare(AT(p))) sput(p, k, p->p[p->pos++]);
+	return k;
+}
+
+static struct toml_kv *tbl_find(toml_value *t, const char *k, size_t n)
+{
+	size_t i;
+	for (i = 0; i < t->nkv; i++)
+		if (t->kv[i].klen == n && !memcmp(t->kv[i].key, k, n))
+			return &t->kv[i];
+	return NULL;
+}
+
+static void tbl_put(P *p, toml_value *t, toml_value *key, toml_value *v)
+{
+	(void)p;
+	if (t->nkv == t->capkv) {
+		t->capkv = t->capkv ? t->capkv * 2 : 8;
+		t->kv = xrealloc(t->kv, t->capkv * sizeof *t->kv);
+	}
+	t->kv[t->nkv].key = key->s;
+	t->kv[t->nkv].klen = key->slen;
+	t->kv[t->nkv].val = v;
+	t->nkv++;
+}
+
+/* ------------------------------------------------------------------ values */
+
+static toml_value *parse_value(P *p)
+{
+	if (p->len - p->pos >= 4 && !memcmp(p->p + p->pos, "true", 4)) {
+		toml_value *v = node(p, TOML_BOOL);
+		p->pos += 4; v->b = 1;
+		return v;
+	}
+	if (p->len - p->pos >= 5 && !memcmp(p->p + p->pos, "false", 5)) {
+		toml_value *v = node(p, TOML_BOOL);
+		p->pos += 5; v->b = 0;
+		return v;
+	}
+	err(p, p->pos, "expected a value");
+	return NULL;
+}
+
 /* ------------------------------------------------------------------ parser */
+
+static int parse_keyval(P *p, toml_value *t)
+{
+	toml_value *k, *v;
+	size_t kpos = p->pos;
+	if (!(k = parse_keypart(p))) return 0;
+	skip_ws(p);
+	if (AT(p) != '=') return err(p, p->pos, "expected '=' after key");
+	p->pos++;
+	skip_ws(p);
+	if (!(v = parse_value(p))) return 0;
+	if (tbl_find(t, k->s, k->slen))
+		return err(p, kpos, "duplicate key");
+	tbl_put(p, t, k, v);
+	return 1;
+}
 
 static int parse_doc(P *p)
 {
@@ -214,7 +321,8 @@ static int parse_doc(P *p)
 	for (;;) {
 		if (!skip_blank(p)) return 0;
 		if (EOFP(p)) return 1;
-		return err(p, p->pos, "expected a key or a table header");
+		if (!parse_keyval(p, p->root)) return 0;
+		if (!expect_eol(p)) return 0;
 	}
 }
 
