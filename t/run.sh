@@ -731,6 +731,31 @@ else
 	else nok "per-file verdicts changed"; cat "$SCRATCH/suite.diff"; fi
 fi
 
+# --- the differential oracle: Python's tomllib -----------------------------
+# A second conforming TOML 1.0.0 implementation, by other people, in another
+# language, over the same 709 corpus files plus a named edge battery and 180
+# generated documents.  Verdict agreement and value agreement are both
+# compared; every disagreement is pinned in t/py_divergences.expected with
+# the spec reasoning in the README, so a new one fails the suite.
+printf '\n--- differential oracle vs Python tomllib\n'
+if [ ! -f "$CORPUS/files-toml-1.0.0" ]; then
+	nok "tomllib differential: corpus missing"
+elif ! python3 -c 'import tomllib' 2>/dev/null; then
+	nok "tomllib differential: python3 has no tomllib (needs 3.11+)"
+else
+	python3 t/oracle.py tomllib ./tomlc "$CORPUS" \
+		--pin "$SCRATCH/py.txt" 2>&1 | tee -a "$OUT"
+	if grep -q '^DIFF verdict agreement with tomllib: 900/906$' "$OUT"
+	then ok "tomllib verdict agreement is 900/906"
+	else nok "tomllib verdict agreement changed"; fi
+	if grep -q '^DIFF value agreement with tomllib: 282/284$' "$OUT"
+	then ok "tomllib value agreement is 282/284"
+	else nok "tomllib value agreement changed"; fi
+	if diff -u t/py_divergences.expected "$SCRATCH/py.txt" > "$SCRATCH/py.diff" 2>&1
+	then ok "the 8 tomllib divergences match t/py_divergences.expected"
+	else nok "the tomllib divergences changed"; cat "$SCRATCH/py.diff"; fi
+fi
+
 pass=$(grep -c '^ok - ' "$OUT")
 fail=$(grep -c '^not ok - ' "$OUT")
 printf '\n%s passed, %s failed\n' "$pass" "$fail"

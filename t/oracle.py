@@ -212,6 +212,192 @@ def suite(tomlc, corpus, pin):
     return 0 if (vfail == 0 and ifail == 0 and crash == 0) else 1
 
 
+# ------------------------------------------------- the tomllib differential
+
+def project(x):
+    """Project a tomllib value into toml-test's tagged encoding."""
+    import datetime
+    if isinstance(x, dict):
+        return {k: project(v) for k, v in x.items()}
+    if isinstance(x, list):
+        return [project(v) for v in x]
+    if isinstance(x, str):
+        return {'type': 'string', 'value': x}
+    if isinstance(x, bool):
+        return {'type': 'bool', 'value': 'true' if x else 'false'}
+    if isinstance(x, int):
+        return {'type': 'integer', 'value': str(x)}
+    if isinstance(x, float):
+        if x != x:
+            return {'type': 'float', 'value': 'nan'}
+        if x in (float('inf'), float('-inf')):
+            return {'type': 'float', 'value': 'inf' if x > 0 else '-inf'}
+        return {'type': 'float', 'value': repr(x)}
+    if isinstance(x, datetime.datetime):
+        kind = 'datetime' if x.tzinfo is not None else 'datetime-local'
+        return {'type': kind, 'value': x.isoformat()}
+    if isinstance(x, datetime.date):
+        return {'type': 'date-local', 'value': x.isoformat()}
+    if isinstance(x, datetime.time):
+        return {'type': 'time-local', 'value': x.isoformat()}
+    raise TypeError('unexpected tomllib type %r' % type(x))
+
+
+def py_parse(data):
+    """(ok, projected) for tomllib on these bytes."""
+    import tomllib
+    try:
+        return True, project(tomllib.loads(data.decode('utf-8')))
+    except UnicodeDecodeError:
+        return False, None
+    except tomllib.TOMLDecodeError:
+        return False, None
+    except (ValueError, OverflowError, RecursionError):
+        # A date-time tomllib accepts syntactically but datetime cannot
+        # represent raises ValueError from the constructor.
+        return False, None
+
+
+def our_parse(tomlc, path):
+    rc, so, se = run(tomlc, path, True)
+    if rc == 0:
+        return True, json.loads(so.decode('utf-8'))
+    return False, None
+
+
+# Documents whose edges the corpus does not reach.  Each one is here because
+# it is a place two conforming parsers may legitimately differ.
+EDGES = [
+    ('a = 23:59:60\n', 'leap second'),
+    ('a = 1990-12-31T23:59:60Z\n', 'leap second with an offset'),
+    ('a = 9223372036854775808\n', 'int64 max plus one'),
+    ('a = -9223372036854775809\n', 'int64 min minus one'),
+    ('a = 0xffffffffffffffff\n', 'unsigned 64-bit max in hex'),
+    ('a = 1e400\n', 'float overflow'),
+    ('a = 1e-400\n', 'float underflow'),
+    ('a = 00:32:00.9999999\n', 'seven fractional digits'),
+    ('a = 1979-05-27T00:32:00.999999999999Z\n', 'twelve fractional digits'),
+    ('a = "\\u0000"\n', 'an escaped NUL in a string'),
+    ('\xef\xbb\xbfa = 1\n', 'a leading UTF-8 BOM'),
+    ('a = """x\r\ny"""\n', 'a CRLF inside a multi-line string'),
+    ('a = -0.0\n', 'negative zero float'),
+    ('a = -0\n', 'negative zero integer'),
+    ('a = -nan\n', 'a signed nan'),
+    ('a = ' + '['*60 + ']'*60 + '\n', 'sixty nested arrays'),
+    ('a = ' + '['*300 + ']'*300 + '\n', 'three hundred nested arrays'),
+]
+
+
+def gen_docs(n):
+    """Deterministic pseudo-random documents.  Not a fuzzer: the point is to
+    cover value shapes nobody wrote a test for, and the mutations to cover
+    rejection agreement on inputs nobody wrote a test for either."""
+    import random
+    rng = random.Random(20261009)
+    scalars = [
+        '0', '-1', '+7', '1_000', '0xdead_beef', '0o755', '0b1010',
+        '9223372036854775807', '-9223372036854775808',
+        '0.0', '-0.0', '3.14', '1e10', '-1E-10', '6.02e23', 'inf', '-inf',
+        'nan', 'true', 'false',
+        '"s"', '""', '"a\\tb"', '"\\u00e9"', '"\\U0001F600"', "'lit'", "''",
+        '"""ml\nstring"""', "'''ml\nlit'''", '"""a\\\n   b"""',
+        '1979-05-27T07:32:00Z', '1979-05-27 07:32:00-07:00',
+        '1979-05-27T07:32:00.123', '1979-05-27', '07:32:00',
+        '[]', '[1, 2, 3]', '[[1], ["a"], [[]]]', '{}', '{x = 1, y.z = 2}',
+        '[{a = 1}, {a = 2}]',
+    ]
+    keys = ['a', 'b', 'key-1', 'key_2', '"q k"', "'l k'", '"\\u00e9"', '1', '""']
+    docs = []
+    for i in range(n):
+        lines = []
+        for _ in range(rng.randrange(1, 6)):
+            lines.append('%s = %s' % (rng.choice(keys), rng.choice(scalars)))
+        for _ in range(rng.randrange(0, 4)):
+            style = rng.randrange(3)
+            name = '%s.%s' % (rng.choice(['t', 'u', 'v']), rng.choice(['x', 'y']))
+            if style == 0:
+                lines.append('[%s]' % name)
+            elif style == 1:
+                lines.append('[[%s]]' % name)
+            else:
+                lines.append('%s = %s' % (name, rng.choice(scalars)))
+            for _ in range(rng.randrange(0, 3)):
+                lines.append('%s = %s' % (rng.choice(keys), rng.choice(scalars)))
+        doc = '\n'.join(lines) + '\n'
+        docs.append(('gen-%03d' % i, doc))
+    # Mutations: a byte flipped, inserted or dropped.  Most of these are
+    # invalid, which is the point -- rejection has to agree too.
+    base = [d for _, d in docs[:60]]
+    for i, d in enumerate(base):
+        if not d:
+            continue
+        pos = rng.randrange(len(d))
+        kind = rng.randrange(3)
+        if kind == 0:
+            m = d[:pos] + chr(rng.randrange(32, 127)) + d[pos + 1:]
+        elif kind == 1:
+            m = d[:pos] + rng.choice('[]{}.,="\'#\\\n\t') + d[pos:]
+        else:
+            m = d[:pos] + d[pos + 1:]
+        docs.append(('mut-%03d' % i, m))
+    return docs
+
+
+def tomllib_mode(tomlc, corpus, pin):
+    scratch = os.path.join(os.path.dirname(corpus), 'py')
+    os.makedirs(scratch, exist_ok=True)
+    tmp = os.path.join(scratch, 'doc.toml')
+    valid, invalid = corpus_files(corpus)
+    verdict_same = verdict_diff = value_same = value_diff = 0
+    div = []
+
+    def one(label, path, data, want_json=None):
+        nonlocal verdict_same, verdict_diff, value_same, value_diff
+        ours, oval = our_parse(tomlc, path)
+        theirs, tval = py_parse(data)
+        if ours != theirs:
+            verdict_diff += 1
+            div.append('%s\t%s' % (label, 'tomllib accepts, tomlc rejects'
+                                   if theirs else 'tomlc accepts, tomllib rejects'))
+            return
+        verdict_same += 1
+        if not ours:
+            return
+        d = cmp_json(tval, oval)
+        if d:
+            value_diff += 1
+            div.append('%s\tvalue: %s' % (label, d))
+        else:
+            value_same += 1
+
+    for name in valid + invalid:
+        path = os.path.join(corpus, name)
+        with open(path, 'rb') as f:
+            one(name, path, f.read())
+    for text, label in EDGES:
+        data = text.encode('utf-8', 'surrogateescape') \
+            if not isinstance(text, bytes) else text
+        with open(tmp, 'wb') as f:
+            f.write(data)
+        one('edge/' + label.replace(' ', '-'), tmp, data)
+    for label, text in gen_docs(120):
+        data = text.encode('utf-8')
+        with open(tmp, 'wb') as f:
+            f.write(data)
+        one(label, tmp, data)
+
+    print('DIFF verdict agreement with tomllib: %d/%d'
+          % (verdict_same, verdict_same + verdict_diff))
+    print('DIFF value agreement with tomllib: %d/%d'
+          % (value_same, value_same + value_diff))
+    for d in sorted(div):
+        print('DIVERGENCE %s' % d)
+    if pin:
+        with open(pin, 'w') as f:
+            f.write('\n'.join(sorted(div)) + ('\n' if div else ''))
+    return 0
+
+
 def main():
     if len(sys.argv) < 4:
         sys.exit(__doc__)
@@ -221,6 +407,8 @@ def main():
         pin = sys.argv[sys.argv.index('--pin') + 1]
     if mode == 'suite':
         sys.exit(suite(tomlc, corpus, pin))
+    if mode == 'tomllib':
+        sys.exit(tomllib_mode(tomlc, corpus, pin))
     sys.exit('unknown mode %s' % mode)
 
 

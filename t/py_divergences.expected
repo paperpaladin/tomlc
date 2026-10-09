@@ -1,0 +1,8 @@
+edge/int64-max-plus-one	tomllib accepts, tomlc rejects
+edge/int64-min-minus-one	tomllib accepts, tomlc rejects
+edge/leap-second	tomlc accepts, tomllib rejects
+edge/leap-second-with-an-offset	tomlc accepts, tomllib rejects
+edge/seven-fractional-digits	value: .a: date-time 00:32:00.999999 != 00:32:00.9999999
+edge/three-hundred-nested-arrays	tomllib accepts, tomlc rejects
+edge/twelve-fractional-digits	value: .a: date-time 1979-05-27T00:32:00.999999+00:00 != 1979-05-27T00:32:00.999999999999Z
+edge/unsigned-64-bit-max-in-hex	tomllib accepts, tomlc rejects
