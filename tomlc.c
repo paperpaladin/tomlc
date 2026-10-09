@@ -326,6 +326,172 @@ static toml_value *parse_basic_string(P *p)
 	}
 }
 
+/* Single-line literal string: no escapes at all, and the same character set
+ * as a basic string minus the backslash. */
+static toml_value *parse_literal_string(P *p)
+{
+	toml_value *v = snode(p, TOML_STRING);
+	size_t at = p->pos;
+	p->pos++;
+	for (;;) {
+		unsigned c;
+		if (EOFP(p)) { err(p, at, "unterminated literal string"); return NULL; }
+		c = AT(p);
+		if (c == '\'') { p->pos++; return v; }
+		if (c == '\n' || c == '\r') {
+			err(p, at, "unterminated literal string");
+			return NULL;
+		}
+		if (c < 0x20 ? c != '\t' : c == 0x7f) {
+			err(p, p->pos, "control character in literal string");
+			return NULL;
+		}
+		sput(p, v, (int)c);
+		p->pos++;
+	}
+}
+
+/* A newline immediately after the opening delimiter of either multi-line form
+ * is trimmed, and only that one. */
+static void trim_first_newline(P *p)
+{
+	if (AT(p) == '\n') p->pos++;
+	else if (AT(p) == '\r' && AT1(p) == '\n') p->pos += 2;
+}
+
+/* The line-ending backslash: the last non-whitespace character on a line, it
+ * eats itself, the rest of the line, the newline, and every blank line and
+ * leading space after it. */
+static int trim_ws_newlines(P *p)
+{
+	size_t at = p->pos - 1;
+	skip_ws(p);
+	if (!skip_newline(p))
+		return err(p, at, "backslash is not the last character on the line");
+	for (;;) {
+		skip_ws(p);
+		if (!skip_newline(p)) return 1;
+	}
+}
+
+/* A run of n quotes inside a multi-line string: up to two are content, three
+ * close it, four or five are content-then-close, six cannot happen because
+ * that would be three quotes of content. */
+static int quote_run(P *p, toml_value *v, int q)
+{
+	int n = 0;
+	while (AT(p) == q) { n++; p->pos++; }
+	if (n < 3) {
+		int i;
+		for (i = 0; i < n; i++) sput(p, v, q);
+		return 0;			/* content, string continues */
+	}
+	if (n > 5) return err(p, p->pos - (size_t)n, "too many quotes"), -1;
+	{
+		int i;
+		for (i = 0; i < n - 3; i++) sput(p, v, q);
+	}
+	return 1;				/* closed */
+}
+
+static toml_value *parse_ml_basic(P *p)
+{
+	toml_value *v = snode(p, TOML_STRING);
+	size_t at = p->pos;
+	p->pos += 3;
+	trim_first_newline(p);
+	for (;;) {
+		unsigned c;
+		if (EOFP(p)) { err(p, at, "unterminated multi-line string"); return NULL; }
+		c = AT(p);
+		if (c == '"') {
+			int r = quote_run(p, v, '"');
+			if (r < 0) return NULL;
+			if (r) return v;
+			continue;
+		}
+		if (c == '\\') {
+			/* A backslash before a newline (or before trailing
+			 * whitespace and a newline) is the line-ending form;
+			 * anything else is an ordinary escape. */
+			size_t q = p->pos + 1;
+			while (q < p->len && is_ws(p->p[q])) q++;
+			if (q < p->len && (p->p[q] == '\n' ||
+			    (p->p[q] == '\r' && q + 1 < p->len && p->p[q + 1] == '\n'))) {
+				p->pos++;
+				if (!trim_ws_newlines(p)) return NULL;
+				continue;
+			}
+			if (!read_escape(p, v)) return NULL;
+			continue;
+		}
+		if (c == '\r') {
+			if (AT1(p) != '\n')
+				return err(p, p->pos, "bare carriage return in string"), NULL;
+			/* CRLF inside a multi-line string is normalised to
+			 * LF.  TOML 1.0.0 lets a parser "normalize newline to
+			 * whatever makes sense", no valid toml-test case has a
+			 * raw CRLF in string content, and tomllib normalises,
+			 * so agreeing with tomllib costs nothing. */
+			sput(p, v, '\n');
+			p->pos += 2;
+			continue;
+		}
+		if (c == '\n') { sput(p, v, '\n'); p->pos++; continue; }
+		if (c < 0x20 ? c != '\t' : c == 0x7f)
+			return err(p, p->pos, "control character in string"), NULL;
+		sput(p, v, (int)c);
+		p->pos++;
+	}
+}
+
+static toml_value *parse_ml_literal(P *p)
+{
+	toml_value *v = snode(p, TOML_STRING);
+	size_t at = p->pos;
+	p->pos += 3;
+	trim_first_newline(p);
+	for (;;) {
+		unsigned c;
+		if (EOFP(p)) { err(p, at, "unterminated multi-line literal string"); return NULL; }
+		c = AT(p);
+		if (c == '\'') {
+			int r = quote_run(p, v, '\'');
+			if (r < 0) return NULL;
+			if (r) return v;
+			continue;
+		}
+		if (c == '\r') {
+			if (AT1(p) != '\n')
+				return err(p, p->pos, "bare carriage return in string"), NULL;
+			/* CRLF inside a multi-line string is normalised to
+			 * LF.  TOML 1.0.0 lets a parser "normalize newline to
+			 * whatever makes sense", no valid toml-test case has a
+			 * raw CRLF in string content, and tomllib normalises,
+			 * so agreeing with tomllib costs nothing. */
+			sput(p, v, '\n');
+			p->pos += 2;
+			continue;
+		}
+		if (c == '\n') { sput(p, v, '\n'); p->pos++; continue; }
+		if (c < 0x20 ? c != '\t' : c == 0x7f)
+			return err(p, p->pos, "control character in string"), NULL;
+		sput(p, v, (int)c);
+		p->pos++;
+	}
+}
+
+/* Any of the four string forms, as a value. */
+static toml_value *parse_string(P *p)
+{
+	if (AT(p) == '"') {
+		if (AT1(p) == '"' && AT2(p) == '"') return parse_ml_basic(p);
+		return parse_basic_string(p);
+	}
+	if (AT1(p) == '\'' && AT2(p) == '\'') return parse_ml_literal(p);
+	return parse_literal_string(p);
+}
+
 static int is_bare(int c)
 {
 	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
@@ -337,7 +503,14 @@ static int is_bare(int c)
 static toml_value *parse_keypart(P *p)
 {
 	toml_value *k;
-	if (AT(p) == '"') return parse_basic_string(p);
+	if (AT(p) == '"' || AT(p) == '\'') {
+		int q = AT(p);
+		if (AT1(p) == q && AT2(p) == q) {
+			err(p, p->pos, "a key cannot be a multi-line string");
+			return NULL;
+		}
+		return q == '"' ? parse_basic_string(p) : parse_literal_string(p);
+	}
 	if (!is_bare(AT(p))) {
 		err(p, p->pos, "expected a key");
 		return NULL;
@@ -373,7 +546,7 @@ static void tbl_put(P *p, toml_value *t, toml_value *key, toml_value *v)
 
 static toml_value *parse_value(P *p)
 {
-	if (AT(p) == '"') return parse_basic_string(p);
+	if (AT(p) == '"' || AT(p) == '\'') return parse_string(p);
 	if (p->len - p->pos >= 4 && !memcmp(p->p + p->pos, "true", 4)) {
 		toml_value *v = node(p, TOML_BOOL);
 		p->pos += 4; v->b = 1;
