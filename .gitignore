@@ -1,0 +1,5 @@
+# build products
+tomlc
+*.o
+# scratch: extracted conformance corpus and generated documents
+scratch/
