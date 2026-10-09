@@ -999,6 +999,18 @@ static toml_value *hdr_descend(P *p, toml_value *t, toml_value *key, size_t at)
 			err(p, at, "cannot use a non-table key as a table");
 			return NULL;
 		}
+		/* An inline table is closed forever, and a table built by a
+		 * dotted key may not be reopened by a header -- not even to
+		 * pass through it on the way to a deeper one. */
+		if (e->val->flags & F_INLINE) {
+			err(p, at, "cannot extend an inline table");
+			return NULL;
+		}
+		if (e->val->flags & F_DOTTED) {
+			err(p, at, "cannot extend a table defined by a "
+			    "dotted key");
+			return NULL;
+		}
 		return e->val;
 	}
 	n = node(p, TOML_TABLE);

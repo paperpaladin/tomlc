@@ -584,6 +584,40 @@ rej '[[parent.arr]]\n[parent]\narr = 2' 'overwriting the array from its parent t
 rej '[[a]]\nb.y = 1\n[a]\n'           'a table over an array element'
 rej '[[a.b]]\n[a]\nb.y = 2'           'a dotted key reaching into an array'
 
+# --- the redefinition rules ------------------------------------------------
+# Most of toml-test's invalid/ tree is this one subject.  The matrix is: how
+# a table came to exist (header, header prefix, dotted key, inline table,
+# [[array]] element) against what tries to touch it afterwards.
+printf '\n--- redefinition rules\n'
+acc '[a.b.c]\nz = 1\n[a]\nq = 2'      'implicit then explicit, no overlap'
+acc '[a]\nq = 2\n[a.b.c]\nz = 1'      'explicit then deeper implicit'
+acc '[a]\nb.c = 1\nb.d = 2'           'two dotted keys in the same body'
+acc '[a]\nb.c = 1\n[a.d]\nx = 1'      'a dotted key and an unrelated sibling header'
+acc 'a.b = 1\n[c]\nd = 2'             'a top-level dotted key then a table'
+acc '[[a]]\n[[a]]\n[a.b]\nx = 1'      'a header into the last array element'
+acc 'a = {b = {c = 1}}\n[d]\ne = 1'   'a closed inline table beside a table'
+rej '[a]\nb = {c = 1}\n[a.b]'         'a header over an inline table'
+rej '[a]\nb = {c = 1}\n[a.b.d]'       'a header through an inline table'
+rej '[a]\nb = {c = 1}\nb.d = 2'       'a dotted key over an inline table'
+rej 'a = {b = 1}\na.c = 2'            'a dotted key into a top-level inline table'
+rej '[a]\nb.c = 1\n[a.b]'             'a header over a dotted-key table'
+rej '[a]\nb.c = 1\n[a.b.d]'           'a header through a dotted-key table'
+rej '[a]\nb.c.d = 1\n[a.b.c]'         'a header over a deeper dotted-key table'
+rej '[a]\nb.c = 1\n[[a.b]]'           'an array of tables over a dotted-key table'
+rej 'a.b = 1\n[[a.c]]'                'an array of tables through a dotted-key table'
+rej '[a.b]\nc = 1\n[a]\nb.d = 2'      'a dotted key into a table from a header'
+rej '[a]\n[a.b]\n[a.b]'               'the same nested table twice'
+rej '[a]\n[a.b]\nc = 1\n[a.b]\nc = 2' 'the same nested table twice with keys'
+rej '[a.b]\n[a]\n[a.b]'               'implicit, explicit, then the child again'
+rej '[a.b]\nc = 1\n[a]\n[a.b]\nc = 2' 'the same with keys in between'
+rej '[a.b]\n[a]\n[a]'                 'the super-table twice'
+rej '[fruit]\ntype = "apple"\n[fruit.type]\napple = "yes"' 'a header over a string key'
+rej '[fruit]\napple.color = "red"\n[[fruit.apple]]' 'an array of tables over a dotted key'
+rej '[dependencies.foo]\nv = 1\n[dependencies]\nl = 2\n[dependencies]\nr = 3' 'a table claimed implicitly then twice explicitly'
+rej 'a = 1\n[a.b.c.d]'                'a deep header over an integer'
+rej 'a = {}\n[a]'                     'a header over an empty inline table'
+rej 'a = {}\n[[a]]'                   'an array of tables over an empty inline table'
+
 pass=$(grep -c '^ok - ' "$OUT")
 fail=$(grep -c '^not ok - ' "$OUT")
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
