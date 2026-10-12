@@ -81,17 +81,24 @@ agreement.  It was the only code path that sees the 17 edge documents and the
 180 generated ones, 60 of them byte-mutated -- the only inputs here nobody
 chose.
 
-Measured, with `tomlc` calling `abort()` where it returns 1:
+Measured, with `tomlc` calling `abort()` where it returns 1 -- so every
+document it would have rejected now crashes instead:
 
 ```
-old:  638/906 agreement, 0 crashes reported
-new:  438/442 agreement, 464 crashes reported
+old:  899/906 agreement, 0 crashes reported
+new:  284/287 agreement, 619 crashes reported
 ```
 
-Of the 464 that crashed, the old code counted **200 as agreement** -- the
-invalid ones, where `(False, None)` said we had rejected what we had in fact
-aborted on.  `our_parse` now has a third outcome, the count is printed
-unconditionally including the zero, and `t/run.sh` asserts it.
+619 documents crashed, and the old two-outcome code counted **615 of them as
+agreement**: `(False, None)` said we had rejected what we had in fact aborted
+on, and the old run's numbers are byte-identical to a clean one. `our_parse`
+now has a third outcome, the count is printed unconditionally including the
+zero, and `t/run.sh` asserts it.
+
+(These figures were 638/906, 438/442, 464 crashes and "200 as agreement".
+None of them reproduce: 464 is also arithmetically impossible now, since
+tomlc rejects 619 of the 906 documents and 501 of those are the invalid
+corpus alone.)
 
 ### The first real bug the suite found
 
@@ -121,11 +128,11 @@ documents and 180 generated ones (120 built from a grammar with a fixed seed,
 60 of those then mutated by a flipped, inserted or deleted byte):
 
 ```
-DIFF verdict agreement with tomllib: 900/906
+DIFF verdict agreement with tomllib: 899/906
 DIFF value agreement with tomllib: 282/284
 ```
 
-Eight divergences, all pinned in `t/py_divergences.expected`, each one checked
+Nine divergences, all pinned in `t/py_divergences.expected`, each one checked
 against the spec text rather than assumed to be in our favour:
 
 | divergence | who is right |
@@ -134,9 +141,17 @@ against the spec text rather than assumed to be in our favour:
 | `9223372036854775808`, `-9223372036854775809`, `0xffffffffffffffff` -- tomllib accepts, we reject | **both.**  The spec ties this to representation, not to a fixed range: "if an integer cannot be represented losslessly, an error must be thrown".  Python's `int` can represent them; our `int64_t` cannot.  toml-test has no integer-overflow file at all, which is what you would expect of a question with no single answer. |
 | `00:32:00.9999999` and twelve fractional digits -- same verdict, different value | **both.**  tomllib truncates to microseconds (`datetime` again), we keep every digit written.  The spec: "if the value contains greater precision than the implementation can support, the additional precision must be truncated, not rounded."  toml-test's comparator truncates both sides to nanoseconds anyway. |
 | 300 nested arrays -- tomllib accepts, we reject | **both.**  Our depth limit is 200 (see below).  The spec says nothing about depth. |
+| a leading UTF-8 BOM -- we accept, tomllib rejects | **we are.**  toml-test ships `invalid/encoding/bom-not-at-start-01..03` and no `bom-at-start` case, so the suite's own position is that a BOM at the start is acceptable and only a BOM elsewhere is not.  tomllib decodes first, so the BOM arrives as U+FEFF where a bare key is expected; its documentation puts the responsibility for stripping it on the caller. |
 
-There is no case where we accept something tomllib rejects other than the two
-leap seconds, which is the direction that would be alarming.
+Three cases where we accept something tomllib rejects: the two leap seconds
+and a leading BOM. That is the direction that would be alarming, so each one
+is argued above rather than listed.
+
+The BOM case was not visible until recently. It was written as a Python `str`
+of five characters, which encodes to six bytes of mojibake -- both parsers
+reject that as a bad key, so it scored as agreement and tested nothing about
+BOMs at all. With the real three bytes the disagreement appears, and verdict
+agreement is 899/906 rather than 900/906.
 
 ## Third oracle: the sanitizers
 
@@ -160,8 +175,10 @@ were wrong first:
 
 Verified rather than assumed: with the truncation check removed from
 `utf8_bad`, `make test-asan` reports `heap-buffer-overflow tomlc.c:137 in
-utf8_bad` on the first corpus file.  With the over-allocations restored and
-the same bug in place, it does not.
+utf8_bad` and the truncation sweep goes red -- 33 of the 709 corpus files trip
+it, the first being `invalid/encoding/bad-codepoint.toml`, not the first file
+in the sweep.  With the over-allocations restored and the same bug in place,
+it does not.
 
 The build is bit-for-bit reproducible across build directory, `TZ`, locale,
 umask, `-j` and `SOURCE_DATE_EPOCH`

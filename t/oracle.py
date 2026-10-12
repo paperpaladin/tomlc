@@ -296,7 +296,11 @@ EDGES = [
     ('a = 00:32:00.9999999\n', 'seven fractional digits'),
     ('a = 1979-05-27T00:32:00.999999999999Z\n', 'twelve fractional digits'),
     ('a = "\\u0000"\n', 'an escaped NUL in a string'),
-    ('\xef\xbb\xbfa = 1\n', 'a leading UTF-8 BOM'),
+    # BYTES, not a str. As a str this is five characters that encode to six
+    # bytes of mojibake (c3 af c2 bb c2 bf ...), which both parsers reject as
+    # a bad key -- so it scored as agreement and tested nothing about BOMs.
+    # The loop below already honours a bytes entry.
+    (b'\xef\xbb\xbfa = 1\n', 'a leading UTF-8 BOM'),
     ('a = """x\r\ny"""\n', 'a CRLF inside a multi-line string'),
     ('a = -0.0\n', 'negative zero float'),
     ('a = -0\n', 'negative zero integer'),

@@ -1,3 +1,4 @@
+edge/a-leading-UTF-8-BOM	tomlc accepts, tomllib rejects
 edge/int64-max-plus-one	tomllib accepts, tomlc rejects
 edge/int64-min-minus-one	tomllib accepts, tomlc rejects
 edge/leap-second	tomlc accepts, tomllib rejects

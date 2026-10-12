@@ -148,7 +148,7 @@ Ranked by how little we control them.
       run); two of this repository's own tests asserted the wrong thing.
       watched failing: three ways, including hiding the vendored tarball,
       which reports "not ok" rather than skipping silently.
-- [x] `the tomllib differential oracle: 900/906, 282/284, 8 pinned`
+- [x] `the tomllib differential oracle: 899/906, 282/284, 9 pinned`
       why: a second conforming implementation by other people, over the
       corpus plus a named edge battery plus generated and mutated documents.
       found: tomllib rejects leap seconds, which TOML 1.0.0 allows.  A real

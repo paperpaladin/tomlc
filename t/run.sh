@@ -745,8 +745,14 @@ elif ! python3 -c 'import tomllib' 2>/dev/null; then
 else
 	python3 t/oracle.py tomllib ./tomlc "$CORPUS" \
 		--pin "$SCRATCH/py.txt" 2>&1 | tee -a "$OUT"
-	if grep -q '^DIFF verdict agreement with tomllib: 900/906$' "$OUT"
-	then ok "tomllib verdict agreement is 900/906"
+	# 899, not 900. The leading-UTF-8-BOM edge case used to be a `str`
+	# holding five characters, which encodes to six bytes of mojibake --
+	# both parsers reject that as a bad key, so it scored as agreement and
+	# tested nothing about BOMs. With the real three bytes, tomlc accepts
+	# and tomllib rejects, which is a genuine disagreement and is pinned in
+	# t/py_divergences.expected.
+	if grep -q '^DIFF verdict agreement with tomllib: 899/906$' "$OUT"
+	then ok "tomllib verdict agreement is 899/906"
 	else nok "tomllib verdict agreement changed"; fi
 	if grep -q '^DIFF value agreement with tomllib: 282/284$' "$OUT"
 	then ok "tomllib value agreement is 282/284"
