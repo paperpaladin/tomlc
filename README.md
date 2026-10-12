@@ -40,7 +40,7 @@ comparison a JSON diff with no judgement in it.
 `f834ef8c87da6dfc8ad78bf145532aa38dd103971ce8c7585d0692aa1577b4bc`), fetched
 from the suite's `main` branch on 2026-10-09 (upstream's last tagged release
 at that point was v2.2.0, 2026-03-30).  Licence beside it in
-`t/toml-test-LICENSE`.  It holds 917 files: the 208 valid `.toml` documents,
+`t/toml-test-LICENSE`.  It holds 918 files: the 208 valid `.toml` documents,
 their 208 expected `.json` files, the 501 invalid `.toml` documents, and the
 suite's own `tests/files-toml-1.0.0` list.
 
