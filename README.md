@@ -6,7 +6,7 @@ status and dumps the parsed document as JSON.  No dependencies beyond libc.
 
 ```sh
 make            # gcc -std=c11 -Wall -Wextra -Wpedantic -O2
-make test       # 629 checks, including the conformance score
+make test       # 630 checks, including the conformance score
 make test-asan  # the same, under -fsanitize=address,undefined
 ```
 
@@ -145,7 +145,7 @@ truncation sweep: **45517** malformed documents, every prefix of every corpus
 file, plus ten hand-written cut shapes the corpus does not contain (an escape
 cut in half, a multi-line delimiter cut between its quotes, a date-time cut at
 every field boundary, an inline table cut mid-key) and 400kB of
-`/dev/urandom`.  Clean: 629 passed, 0 failed.
+`/dev/urandom`.  Clean: 630 passed, 0 failed.
 
 Two allocation details decide whether any of that is worth running, and both
 were wrong first:
