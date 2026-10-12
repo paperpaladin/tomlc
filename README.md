@@ -14,6 +14,7 @@ make test-asan  # the same, under -fsanitize=address,undefined
 tomlc FILE          # exit 0 valid, exit 1 invalid, message on stderr
 tomlc -j FILE       # dump the document as toml-test tagged JSON
 tomlc -S FILE       # parse every truncation of FILE; report only that none crashed
+tomlc -h            # usage
 ```
 
 ## The score, which is the only interesting claim

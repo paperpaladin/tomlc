@@ -1347,11 +1347,12 @@ int main(int argc, char **argv)
 
 	for (i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-			printf("usage: tomlc [-j|-S] [FILE]\n"
+			printf("usage: tomlc [-j|-S|-h] [FILE]\n"
 			       "  validates FILE (or stdin); exit 0 valid, 1 invalid\n"
 			       "  -j  dump the document as toml-test tagged JSON\n"
 			       "  -S  parse every truncation of FILE and report nothing but\n"
-			       "      that none of them crashed\n");
+			       "      that none of them crashed\n"
+			       "  -h  this message (the one flag this message omitted)\n");
 			return 0;
 		}
 		if (!strcmp(argv[i], "-j")) { json = 1; continue; }
