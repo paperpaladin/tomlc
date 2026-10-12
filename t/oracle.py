@@ -258,11 +258,29 @@ def py_parse(data):
         return False, None
 
 
+CRASHED = object()   # distinguishable from both True and False
+
+
 def our_parse(tomlc, path):
+    """(accepted, value), or (CRASHED, status) if tomlc did neither.
+
+    The third outcome is the point. This used to return (False, None) for
+    any nonzero status, so a SIGSEGV or an ASan abort on an invalid
+    document was indistinguishable from a clean rejection -- tomllib
+    rejects it too, the verdicts "agree", and the crash is counted as
+    agreement. suite() has always got this right (`if rc not in (0, 1)`);
+    the differential did not, and the differential is the only thing that
+    sees the 17 edge documents and the 180 generated and byte-mutated ones.
+    Those 60 mutated documents are the only inputs here nobody chose, which
+    makes this the one place a crash was most likely to appear and least
+    likely to be noticed.
+    """
     rc, so, se = run(tomlc, path, True)
     if rc == 0:
         return True, json.loads(so.decode('utf-8'))
-    return False, None
+    if rc == 1:
+        return False, None
+    return CRASHED, rc
 
 
 # Documents whose edges the corpus does not reach.  Each one is here because
@@ -349,12 +367,21 @@ def tomllib_mode(tomlc, corpus, pin):
     tmp = os.path.join(scratch, 'doc.toml')
     valid, invalid = corpus_files(corpus)
     verdict_same = verdict_diff = value_same = value_diff = 0
+    crashed = 0
     div = []
 
     def one(label, path, data, want_json=None):
-        nonlocal verdict_same, verdict_diff, value_same, value_diff
+        nonlocal verdict_same, verdict_diff, value_same, value_diff, crashed
         ours, oval = our_parse(tomlc, path)
         theirs, tval = py_parse(data)
+        if ours is CRASHED:
+            # Counted separately and never as agreement. `ours == theirs`
+            # would have been False here either way, which is why the old
+            # two-outcome version folded a crash on an invalid document
+            # into "both rejected it".
+            crashed += 1
+            div.append('%s\tCRASH exit %s' % (label, oval))
+            return
         if ours != theirs:
             verdict_diff += 1
             div.append('%s\t%s' % (label, 'tomllib accepts, tomlc rejects'
@@ -390,12 +417,19 @@ def tomllib_mode(tomlc, corpus, pin):
           % (verdict_same, verdict_same + verdict_diff))
     print('DIFF value agreement with tomllib: %d/%d'
           % (value_same, value_same + value_diff))
+    # Printed unconditionally, including the zero. A crash count that only
+    # appears when it is non-zero is a line nobody learns to look for, and
+    # the denominators above do not include crashes -- so without this the
+    # reader cannot tell 906 comparisons from 906 comparisons plus some
+    # number of aborts.
+    print('DIFF documents that crashed rather than parsing or rejecting: %d'
+          % crashed)
     for d in sorted(div):
         print('DIVERGENCE %s' % d)
     if pin:
         with open(pin, 'w') as f:
             f.write('\n'.join(sorted(div)) + ('\n' if div else ''))
-    return 0
+    return 1 if crashed else 0
 
 
 def main():

@@ -751,6 +751,16 @@ else
 	if grep -q '^DIFF value agreement with tomllib: 282/284$' "$OUT"
 	then ok "tomllib value agreement is 282/284"
 	else nok "tomllib value agreement changed"; fi
+	# A document that crashed rather than parsing or rejecting is not a
+	# disagreement with tomllib and is not an agreement either -- and the
+	# differential used to fold it into agreement, because our_parse
+	# returned the same (False, None) for exit 1 and for exit 139, and
+	# tomllib rejects an invalid document too. Asserted on its own line so
+	# the two agreement figures above cannot absorb it.
+	if grep -q '^DIFF documents that crashed rather than parsing or rejecting: 0$' "$OUT"
+	then ok "no document crashed rather than parsing or rejecting"
+	else nok "tomlc crashed on at least one document"
+	     grep '^DIVERGENCE.*CRASH' "$OUT" | head -5; fi
 	if diff -u t/py_divergences.expected "$SCRATCH/py.txt" > "$SCRATCH/py.diff" 2>&1
 	then ok "the 8 tomllib divergences match t/py_divergences.expected"
 	else nok "the tomllib divergences changed"; cat "$SCRATCH/py.diff"; fi
