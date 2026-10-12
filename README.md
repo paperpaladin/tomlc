@@ -72,6 +72,26 @@ not, and the per-file verdicts for all 709 files are pinned in
 `t/suite.expected` and diffed on every run, so a change that keeps the totals
 but moves a file still fails.
 
+That held for the corpus scoring and **not** for the tomllib differential.
+`our_parse` returned the same `(False, None)` for exit 1 and for exit 139, so
+a crash on an invalid document was indistinguishable from a clean rejection:
+tomllib rejects it too, the verdicts agree, and the crash is counted as
+agreement.  It was the only code path that sees the 17 edge documents and the
+180 generated ones, 60 of them byte-mutated -- the only inputs here nobody
+chose.
+
+Measured, with `tomlc` calling `abort()` where it returns 1:
+
+```
+old:  638/906 agreement, 0 crashes reported
+new:  438/442 agreement, 464 crashes reported
+```
+
+Of the 464 that crashed, the old code counted **200 as agreement** -- the
+invalid ones, where `(False, None)` said we had rejected what we had in fact
+aborted on.  `our_parse` now has a third outcome, the count is printed
+unconditionally including the zero, and `t/run.sh` asserts it.
+
 ### The first real bug the suite found
 
 On the first run the score was 206/208.  The redefinition rules, written two
