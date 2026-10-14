@@ -30,7 +30,7 @@ leak.**
 
 All three halves are externally checked.  The first two are scored against
 toml-test, which supplies both the accept/reject verdict and the expected
-parse; the third is checked by parsing every truncation of every corpus file
+parse. The third is checked by parsing every truncation of every corpus file
 under `-fsanitize=address,undefined`.
 
 A TOML parser that claims conformance without a number from a corpus the author
@@ -40,22 +40,22 @@ did not write is making an unverifiable claim.  The number is the deliverable.
 
 Ranked by how little we control them.
 
-1. **toml-test** (github.com/toml-lang/toml-test, MIT, TOML authors).  The
+1. toml-test (github.com/toml-lang/toml-test, MIT, TOML authors).  The
    standard cross-implementation suite.  `tests/valid/` pairs each `.toml` with
    a `.json` giving the exact expected parse; `tests/invalid/` must all be
    rejected.  `tests/files-toml-1.0.0` names the subset that applies to TOML
    1.0.0, which is the version we implement, so that list is the vendored
    subset: 208 valid documents with their expected JSON and 501 invalid ones.
    Not ours, not derived from our reading of the spec, and built specifically
-   out of the inputs that broke real parsers -- two thirds of `invalid/` is
+   out of the inputs that broke real parsers, two thirds of `invalid/` is
    about the redefinition rules alone.
-2. **Python's `tomllib`** (3.11+, standard library, a conforming TOML 1.0.0
+2. Python's `tomllib` (3.11+, standard library, a conforming TOML 1.0.0
    parser by other authors).  A differential oracle in two directions:
-   accept/reject agreement over the whole corpus, and value agreement -- parse
+   accept/reject agreement over the whole corpus, and value agreement, parse
    with both, project both into the same tagged encoding, compare.  Plus
    generated documents, which is the only part of the testing that is not
    limited to inputs somebody already thought of.
-3. **The sanitizers.**  `-fsanitize=address,undefined` over the truncation
+3. The sanitizers.  `-fsanitize=address,undefined` over the truncation
    sweep: every prefix of every corpus file is a malformed document we did not
    have to invent.  Not a correctness oracle, but the only authority on memory
    safety that is not our own opinion.
@@ -70,7 +70,7 @@ Ranked by how little we control them.
 - Preserving the spelling of a number.  `0x10`, `16` and `1_6` all parse to the
   integer 16 and dump as `"16"`, which is what toml-test expects.
 - Arbitrary-precision integers or decimal floats.  Integers are `int64_t` and
-  out-of-range is a parse error, as the spec requires; floats are `double`.
+  out-of-range is a parse error, as the spec requires. Floats are `double`.
 - A streaming or incremental interface.  The document is in memory anyway.
 
 ## Commit sequence
@@ -83,7 +83,7 @@ Ranked by how little we control them.
       watched failing: the plain c < 0x20 comment test, 26 passed 1 failed.
 - [x] `bare keys and booleans: the first key = value line`
       why: the statement framing and the duplicate-key rule, which has to land
-      with the table it applies to rather than later.
+      with the table it applies to, not later.
       watched failing: the duplicate check stubbed to if (0), 1 failure.
 - [x] `basic strings: the closed escape set, control characters, quoted keys`
       why: strings are where a corpus concentrates its failures, and a lone
@@ -123,7 +123,7 @@ Ranked by how little we control them.
       watched failing: the comma branch accepting '}', 2 failures.  Note that
       deleting the trailing-comma check fails nothing, which is worth knowing.
 - [x] `arrays`
-      why: the mirror image -- newlines and comments everywhere, trailing
+      why: the mirror image, newlines and comments everywhere, trailing
       comma allowed.  Using one whitespace helper for both is the bug.
       watched failing: separators treated as optional, 3 failures.
 - [x] `arrays of tables`
@@ -133,11 +133,11 @@ Ranked by how little we control them.
 - [x] `the redefinition rules`
       why: two thirds of toml-test's invalid/ tree is this one subject, and
       passing *through* a closed table is as much an extension as landing on
-      it -- the case a parser written around "is the final key taken?" misses.
+      it: the case a parser written around "is the final key taken?" misses.
       watched failing: the F_INLINE and F_DOTTED descend tests, 3 failures.
 - [x] `the JSON dumper in toml-test's tagged encoding`
       why: this is what makes conformance a JSON diff with no judgement in it,
-      and the first commit whose tests look at the value rather than the
+      and the first commit whose tests look at the value, not the
       verdict.  It immediately proved the multi-line trimming rules that no
       accept/reject test could see.
       watched failing: the blank-line loop deleted from the line-ending
@@ -147,7 +147,7 @@ Ranked by how little we control them.
       found: the redefinition rules were too strict (206/208 on the first
       run); two of this repository's own tests asserted the wrong thing.
       watched failing: three ways, including hiding the vendored tarball,
-      which reports "not ok" rather than skipping silently.
+      which reports "not ok" instead of skipping silently.
 - [x] `the tomllib differential oracle: 899/906, 282/284, 9 pinned`
       why: a second conforming implementation by other people, over the
       corpus plus a named edge battery plus generated and mutated documents.
@@ -165,7 +165,7 @@ Ranked by how little we control them.
       both verified by reintroducing the bug.
 - [x] `README, PLAN and the error-message format`
       why: a README that only lists successes is not finished, and a format
-      the README documents should be asserted rather than described.
+      the README documents should be asserted, not described.
 
 Next, in order:
 
@@ -173,13 +173,13 @@ Next, in order:
       why: the suite ships tests/files-toml-1.1.0 and we deliberately fail
       parts of it.  Printing "1.1: N/M, and here is exactly which files and
       why" is a stronger statement than "1.1 not supported", and it would
-      make the eventual decision about 1.1 a measurement rather than an
+      make the eventual decision about 1.1 a measurement, not an
       argument.  Needs the runner to take the list as a parameter and a
       second pinned expectation file; the code does not change.
 - [ ] `a real arena behind the node registry`
       why: one malloc per node and one per string.  The registry already
       makes freeing a single loop, so the remaining win is allocation count,
-      and nothing here is currently allocation-bound -- `-S` over the corpus
+      and nothing here is currently allocation-bound: `-S` over the corpus
       is 45517 parses in under a second.  Measure before writing it.
 - [ ] `locale independence, or stop using strtod`
       why: the one limitation in the README asserted from the standard rather
