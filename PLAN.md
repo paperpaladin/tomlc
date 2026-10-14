@@ -44,7 +44,7 @@ Ranked by how little we control them.
    standard cross-implementation suite.  `tests/valid/` pairs each `.toml` with
    a `.json` giving the exact expected parse; `tests/invalid/` must all be
    rejected.  `tests/files-toml-1.0.0` names the subset that applies to TOML
-   1.0.0, which is the version we implement, so that list is the vendored
+   1.0.0, the version we implement, so that list is the vendored
    subset: 208 valid documents with their expected JSON and 501 invalid ones.
    Not ours, not derived from our reading of the spec, and built specifically
    out of the inputs that broke real parsers, two thirds of `invalid/` is
@@ -53,7 +53,7 @@ Ranked by how little we control them.
    parser by other authors).  A differential oracle in two directions:
    accept/reject agreement over the whole corpus, and value agreement, parse
    with both, project both into the same tagged encoding, compare.  Plus
-   generated documents, which is the only part of the testing that is not
+   generated documents, the only part of the testing that is not
    limited to inputs somebody already thought of.
 3. The sanitizers.  `-fsanitize=address,undefined` over the truncation
    sweep: every prefix of every corpus file is a malformed document we did not
@@ -68,7 +68,7 @@ Ranked by how little we control them.
 - An encoder.  There is no `toml_write`.  The JSON dumper exists to be diffed
   against the corpus, not to be a serialisation API.
 - Preserving the spelling of a number.  `0x10`, `16` and `1_6` all parse to the
-  integer 16 and dump as `"16"`, which is what toml-test expects.
+  integer 16 and dump as `"16"`, as toml-test expects.
 - Arbitrary-precision integers or decimal floats.  Integers are `int64_t` and
   out-of-range is a parse error, as the spec requires. Floats are `double`.
 - A streaming or incremental interface.  The document is in memory anyway.

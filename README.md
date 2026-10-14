@@ -17,7 +17,7 @@ tomlc -S FILE       # parse every truncation of FILE; report only that none cras
 tomlc -h            # usage
 ```
 
-## The score, which is the only interesting claim
+## The score, and the only interesting claim
 
 Anyone can write a TOML parser and assert that it is conformant.  The claim is
 unverifiable without numbers from a corpus the author did not write, so here
@@ -118,7 +118,7 @@ smooth = true
 A header may add a new sub-table to a dotted-key table. What it may not do is
 land on one.  Two of this repository's own hand-written tests asserted the
 wrong thing and had to be corrected: the hand-written tests agreed with the
-bug, which is the entire argument for an oracle somebody else wrote.
+bug, the entire argument for an oracle somebody else wrote.
 
 ## Second oracle: Python's `tomllib`
 
