@@ -30,7 +30,7 @@ leak.**
 
 All three halves are externally checked.  The first two are scored against
 toml-test, which supplies both the accept/reject verdict and the expected
-parse. The third is checked by parsing every truncation of every corpus file
+parse. That third is checked by parsing every truncation of every corpus file
 under `-fsanitize=address,undefined`.
 
 A TOML parser that claims conformance without a number from a corpus the author
