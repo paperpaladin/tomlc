@@ -10,7 +10,7 @@ that scores itself against a corpus it did not write.
   and the test harness treats it as one.
 - `tomlc -j FILE` dumps the parsed document in toml-test's tagged JSON
   encoding, where every scalar is `{"type": ..., "value": ...}` and every value
-  is a string.  That encoding is the whole reason the project is testable: the
+  is a string.  That encoding is the whole reason the project is testable. The
   comparison against the corpus is a JSON diff with no judgement in it.
 - `tomlc -S FILE` runs the truncation sweep: parse every prefix of the file and
   report only that nothing crashed.
@@ -56,7 +56,7 @@ Ranked by how little we control them.
    generated documents, the only part of the testing that is not
    limited to inputs somebody already thought of.
 3. The sanitizers.  `-fsanitize=address,undefined` over the truncation
-   sweep: every prefix of every corpus file is a malformed document we did not
+   sweep. Every prefix of every corpus file is a malformed document we did not
    have to invent.  Not a correctness oracle, but the only authority on memory
    safety that is not our own opinion.
 
