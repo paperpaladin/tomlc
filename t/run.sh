@@ -731,6 +731,84 @@ else
 	else nok "per-file verdicts changed"; cat "$SCRATCH/suite.diff"; fi
 fi
 
+# --- a second file list, scored as a second number -------------------------
+#
+# The point of this is the 1.1 spec, and the vendored toml-test
+# snapshot is 1.0.0 only: it ships files-toml-1.0.0 and nothing else,
+# so there is no 1.1 list to score and that half of the item is
+# blocked on a newer snapshot rather than on any code here.
+#
+# What is NOT blocked is the mechanism. The runner takes the list as a
+# parameter now, so dropping in a files-toml-1.1.0 is one flag and a
+# second pin rather than a rewrite. Scoring a derived list proves the
+# denominator really comes from the file and is not a constant that
+# happens to equal 208, which is the way this would quietly stop
+# meaning anything.
+#
+# Two numbers, never one. "1.1 not supported" is a position; "1.1: N
+# of M, and here is which files and why" is a measurement, and the two
+# cannot share a denominator without one of them becoming useless.
+if [ -f "$CORPUS/files-toml-1.0.0" ]; then
+	grep '^valid/datetime/' "$CORPUS/files-toml-1.0.0" \
+		> "$CORPUS/files-derived" 2>/dev/null
+	n=$(grep -c '\.toml$' "$CORPUS/files-derived" 2>/dev/null || echo 0)
+	if [ "$n" -lt 5 ]; then
+		nok "the derived list has files in it ($n)"
+	else
+		python3 t/oracle.py suite ./tomlc "$CORPUS" \
+			--list files-derived --pin "$SCRATCH/derived.txt" \
+			> "$SCRATCH/derived.out" 2>&1
+		got=$(sed -n 's/^SCORE valid accepted with the expected value: \([0-9]*\)\/\([0-9]*\)$/\2/p' \
+		      "$SCRATCH/derived.out")
+		if [ "$got" = "$n" ]; then
+			ok "a second list is scored on its own denominator ($n files, not 208)"
+		else
+			nok "the second list's denominator is its own" \
+			    "list has $n files, the score says $got"
+		fi
+	fi
+
+	# A list that exists and names nothing. An empty score satisfies
+	# every assertion about a score, so this has to be an error too.
+	: > "$CORPUS/files-empty"
+	if python3 t/oracle.py suite ./tomlc "$CORPUS" --list files-empty \
+	     > "$SCRATCH/empty.out" 2>&1; then
+		nok "an empty file list is an error, not a 0/0 score"
+	elif grep -q 'lists no .toml files' "$SCRATCH/empty.out"; then
+		ok "an empty file list is an error, not a 0/0 score"
+	else
+		nok "an empty file list is an error" "$(head -1 "$SCRATCH/empty.out")"
+	fi
+
+	# A list naming a file the corpus does not have. Skipping it
+	# silently shrinks the denominator, which is the quietest way for a
+	# conformance number to start lying: the score stays high because
+	# the hard cases went missing.
+	{ head -3 "$CORPUS/files-toml-1.0.0"; echo "valid/not-here.toml"; } \
+		> "$CORPUS/files-ghost"
+	if python3 t/oracle.py suite ./tomlc "$CORPUS" --list files-ghost \
+	     > "$SCRATCH/ghost.out" 2>&1; then
+		nok "a list naming an absent file is an error, not a smaller score"
+	elif grep -q 'the corpus does not have' "$SCRATCH/ghost.out"; then
+		ok "a list naming an absent file is an error, not a smaller score"
+	else
+		nok "a list naming an absent file is an error" \
+		    "$(head -1 "$SCRATCH/ghost.out")"
+	fi
+
+	# A list that is not there must be an error. Scoring zero files and
+	# reporting 0/0 would satisfy every assertion ever written about a
+	# score, which is the failure this whole section exists to avoid.
+	if python3 t/oracle.py suite ./tomlc "$CORPUS" \
+	     --list files-toml-9.9.9 > "$SCRATCH/absent.out" 2>&1; then
+		nok "a missing file list is an error, not an empty score"
+	elif grep -q 'no file list at' "$SCRATCH/absent.out"; then
+		ok "a missing file list is an error, not an empty score"
+	else
+		nok "a missing file list is an error" "$(head -1 "$SCRATCH/absent.out")"
+	fi
+fi
+
 # --- the differential oracle: Python's tomllib -----------------------------
 # A second conforming TOML 1.0.0 implementation, by other people, in another
 # language, over the same 709 corpus files plus a named edge battery and 180

@@ -170,12 +170,35 @@ Ranked by how little we control them.
 Next, in order:
 
 - [ ] `score the 1.1 file list as a second, separate number`
+      BLOCKED: there is no 1.1 list to score. The vendored
+      t/toml-test-1.0.0.tar.gz is a 1.0.0 snapshot: it ships
+      files-toml-1.0.0 and nothing else, and the 1.1-only test files
+      are not in it either. This needs a newer toml-test snapshot
+      vendored, which is a decision about what to bring into the
+      repository rather than work to do, so it waits for that instead
+      of sitting at the top of the queue.
       why: the suite ships tests/files-toml-1.1.0 and we deliberately fail
       parts of it.  Printing "1.1: N/M, and here is exactly which files and
       why" is a stronger statement than "1.1 not supported", and it would
       make the eventual decision about 1.1 a measurement, not an
       argument.  Needs the runner to take the list as a parameter and a
       second pinned expectation file; the code does not change.
+      half done: the runner takes --list now, so a files-toml-1.1.0
+      would be one flag and a second pin rather than a rewrite. Only
+      the data is missing.
+      The parameterisation is load-bearing today rather than waiting
+      to be: a derived list of the nine valid/datetime files is scored
+      on its own denominator, which proves the 208 comes from the file
+      and is not a constant that happens to match.
+      Three refusals around it, each the quiet way a conformance score
+      stops meaning anything. A missing list is an error, not 0/0. An
+      empty list is an error, not 0/0. And a list naming a file the
+      corpus does not have is an error, not a smaller denominator,
+      which is the worst of the three: the score stays high because
+      the hard cases went missing.
+      Four mutations, all caught. Two of them needed the empty and
+      ghost lists built first, because nothing could reach those
+      guards.
 - [ ] `a real arena behind the node registry`
       why: one malloc per node and one per string.  The registry already
       makes freeing a single loop, so the remaining win is allocation count,

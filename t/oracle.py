@@ -137,18 +137,39 @@ def run(tomlc, path, dump):
     return pr.returncode, pr.stdout, pr.stderr
 
 
-def corpus_files(corpus):
-    """The vendored tests/files-toml-1.0.0 list, which is what makes the
-    denominator the suite's choice and not ours."""
-    with open(os.path.join(corpus, 'files-toml-1.0.0')) as f:
+def corpus_files(corpus, listname='files-toml-1.0.0'):
+    """A toml-test file list, which is what makes the denominator the
+    suite's choice and not ours.
+
+    The list is a parameter so a second spec version can be scored as a
+    SECOND number rather than folded into the first. "1.1 not
+    supported" is a position; "1.1: N of M, and here is which files and
+    why" is a measurement, and the two cannot share a denominator
+    without one of them becoming meaningless.
+
+    A missing list is an error and not an empty score: scoring zero
+    files and reporting 0/0 would pass every assertion ever written
+    about it.
+    """
+    path = os.path.join(corpus, listname)
+    if not os.path.exists(path):
+        raise SystemExit('oracle: no file list at %s' % path)
+    with open(path) as f:
         names = [l.strip() for l in f if l.strip().endswith('.toml')]
+    if not names:
+        raise SystemExit('oracle: %s lists no .toml files' % path)
     valid = sorted(n for n in names if n.startswith('valid/'))
     invalid = sorted(n for n in names if n.startswith('invalid/'))
+    missing = [n for n in valid + invalid
+               if not os.path.exists(os.path.join(corpus, n))]
+    if missing:
+        raise SystemExit('oracle: %s names %d files the corpus does not have, '
+                         'first is %s' % (path, len(missing), missing[0]))
     return valid, invalid
 
 
-def suite(tomlc, corpus, pin):
-    valid, invalid = corpus_files(corpus)
+def suite(tomlc, corpus, pin, listname='files-toml-1.0.0'):
+    valid, invalid = corpus_files(corpus, listname)
     out = []
     vpass = vfail = ipass = ifail = crash = 0
     fails = []
@@ -443,8 +464,13 @@ def main():
     pin = None
     if '--pin' in sys.argv:
         pin = sys.argv[sys.argv.index('--pin') + 1]
+    # Which toml-test file list to score. Defaults to 1.0.0, so every
+    # existing invocation means what it meant.
+    listname = 'files-toml-1.0.0'
+    if '--list' in sys.argv:
+        listname = sys.argv[sys.argv.index('--list') + 1]
     if mode == 'suite':
-        sys.exit(suite(tomlc, corpus, pin))
+        sys.exit(suite(tomlc, corpus, pin, listname))
     if mode == 'tomllib':
         sys.exit(tomllib_mode(tomlc, corpus, pin))
     sys.exit('unknown mode %s' % mode)
